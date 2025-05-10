@@ -1,0 +1,17 @@
+# EogdMusicPlayer 配置文件
+soundEventName: "custom.music.song1"
+resourcePackPromptMessage: "<gold>服务器音乐包可用！请接受以收听自定义音乐。</gold>"
+onlinePlayPromptMessage: "<gold>正在准备播放在线音乐，请接受临时资源包...</gold>"
+
+httpServer:
+  enabled: true
+  # 重要: 服务器的公共可访问域名。不要包含端口号！
+  publicAddress: "play.simpfun.cn"  # <--- 你的服务器域名,请更改
+  # 这是插件 HTTP 服务器将监听的独立端口。
+  # 如果你是面板服务器，确认你的面板提供商已为你正确配置了此端口的转发。
+  # 确保这个端口与你的游戏端口不同。
+  port: 25199                       # <--- 你确认的 TCP 端口
+  servePath: "musicpacks"           # 资源包URL的路径部分, 例如 http://play.simpfun.cn:25199/musicpacks/pack.zip
+  tempDirectory: "temp_packs"
+  maxDownloadSizeBytes: 20971520
+  cleanupDelaySeconds: 300

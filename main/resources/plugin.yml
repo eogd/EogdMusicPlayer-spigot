@@ -1,0 +1,33 @@
+name: EogdMusicPlayer
+version: '${project.version}'
+main: eogd.musicplayer.MusicPlayerPlugin
+api-version: '1.21'
+author: eogd
+description: 通过服务器资源包和数据库存储播放URL中的音乐。
+database: true
+
+commands:
+  bf:
+    description: EogdMusicPlayer 相关指令。
+    usage: /bf <子命令> [参数]
+    aliases: [music, eogdmusic]
+    permission: musicplayer.use
+  playurl:
+    description: 在线播放指定URL的音乐。
+    usage: /playurl <URL> [玩家名]
+    aliases: [pu, musicurl]
+    permission: musicplayer.playurl
+
+permissions:
+  musicplayer.admin:
+    description: 允许使用EogdMusicPlayer的管理指令。
+    default: op
+  musicplayer.use:
+    description: 允许玩家使用基础的音乐指令，如 /bf d 和 /bf start。
+    default: true
+  musicplayer.playurl:
+    description: 允许播放在线URL的音乐。
+    default: op
+  musicplayer.playurl.others: 
+    description: 允许为其他玩家播放在线URL的音乐。
+    default: op
