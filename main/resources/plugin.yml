@@ -1,33 +1,57 @@
 name: EogdMusicPlayer
-version: '${project.version}'
+version: ${project.version}
 main: eogd.musicplayer.MusicPlayerPlugin
 api-version: '1.21'
-author: eogd
-description: 通过服务器资源包和数据库存储播放URL中的音乐。
-database: true
+author: Eogd
+description: ${project.description}
 
 commands:
   bf:
-    description: EogdMusicPlayer 相关指令。
-    usage: /bf <子命令> [参数]
+    description: 主音乐播放器命令。
+    usage: "/bf <play|playurl|stop|gui|createroom|join|start|roomplay|disbandroom|reload|info>" # 新增 info
     aliases: [music, eogdmusic]
-    permission: musicplayer.use
   playurl:
-    description: 在线播放指定URL的音乐。
-    usage: /playurl <URL> [玩家名]
-    aliases: [pu, musicurl]
-    permission: musicplayer.playurl
+    description: 快速播放指定URL的音乐 (仅自己听)。
+    usage: "/playurl <URL>"
+  internal_join_room:
+    description: Internal command to join a music room.
+    usage: "/internal_join_room <roomId>"
+    permission: eogdmusicplayer.internal.join
 
 permissions:
-  musicplayer.admin:
-    description: 允许使用EogdMusicPlayer的管理指令。
+  eogdmusicplayer.reload:
+    description: 允许重载插件配置。
     default: op
-  musicplayer.use:
-    description: 允许玩家使用基础的音乐指令，如 /bf d 和 /bf start。
+  eogdmusicplayer.play:
+    description: 允许使用 /bf play。
     default: true
-  musicplayer.playurl:
-    description: 允许播放在线URL的音乐。
-    default: op
-  musicplayer.playurl.others: 
-    description: 允许为其他玩家播放在线URL的音乐。
+  eogdmusicplayer.playurl:
+    description: 允许使用 /bf playurl 和 /playurl。
+    default: true
+  eogdmusicplayer.stop:
+    description: 允许使用 /bf stop。
+    default: true
+  eogdmusicplayer.gui:
+    description: 允许使用 /bf gui。
+    default: true
+  eogdmusicplayer.createroom:
+    description: 允许使用 /bf createroom 创建音乐室。
+    default: true
+  eogdmusicplayer.joinroom:
+    description: 允许使用 /bf join 加入音乐室。
+    default: true
+  eogdmusicplayer.room.start:
+    description: 允许音乐室创建者使用 /bf start 播放音乐。
+    default: true
+  eogdmusicplayer.roomplay:
+    description: 允许音乐室创建者使用 /bf roomplay 更新音乐URL。
+    default: true
+  eogdmusicplayer.disbandroom:
+    description: 允许音乐室创建者使用 /bf disbandroom。
+    default: true
+  eogdmusicplayer.info: # 新权限
+    description: 允许使用 /bf info 查看插件信息。
+    default: true
+  eogdmusicplayer.internal.join:
+    description: Allows internal joining to rooms (e.g. via specific plugin features).
     default: op

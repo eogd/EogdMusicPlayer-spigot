@@ -1,165 +1,179 @@
 package eogd.musicplayer;
 
 import org.apache.commons.codec.digest.DigestUtils;
-import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.ChatColor;
+import org.bukkit.entity.Player;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.*;
 import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 public class ResourcePackGenerator {
 
-    private final JavaPlugin plugin;
-    private final File tempPackDir;
+    private final MusicPlayerPlugin plugin;
+    private final File tempPackStorageDir;
     private final long maxDownloadSizeBytes;
 
-    public ResourcePackGenerator(JavaPlugin plugin, File tempPackDir, long maxDownloadSizeBytes) {
-        this.plugin = plugin;
-        this.tempPackDir = tempPackDir;
-        this.maxDownloadSizeBytes = maxDownloadSizeBytes;
-        if (!this.tempPackDir.exists()) {
-            this.tempPackDir.mkdirs();
-        }
-    }
 
-    public GeneratedPackInfo generateForUrl(String musicUrl) {
-        String uniqueId = UUID.randomUUID().toString().substring(0, 8);
-        String oggFileNameInZip = "onlinesong_" + uniqueId + ".ogg";
-        File downloadedOggFileOnServer = new File(tempPackDir, "source_" + oggFileNameInZip);
+    public static class PackInfo {
+        private final String packUrl;
+        private final String sha1;
+        private final String packFileName;
 
-        try {
-            plugin.getLogger().info("开始下载音乐文件: " + musicUrl + " 到: " + downloadedOggFileOnServer.getAbsolutePath());
-            URL url = new URL(musicUrl);
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestProperty("User-Agent", plugin.getName() + "/" + plugin.getDescription().getVersion());
-            connection.setConnectTimeout(15000);
-            connection.setReadTimeout(60000);
-            connection.setInstanceFollowRedirects(true);
-
-            int responseCode = connection.getResponseCode();
-            if (responseCode < 200 || responseCode >= 300) {
-                plugin.getLogger().warning("下载音乐文件失败，URL: " + musicUrl + "，HTTP 状态码: " + responseCode);
-                return null;
-            }
-
-            long fileSize = connection.getContentLengthLong();
-            if (maxDownloadSizeBytes > 0 && fileSize > maxDownloadSizeBytes) {
-                plugin.getLogger().warning("音乐文件太大: " + fileSize + " 字节 (限制: " + maxDownloadSizeBytes + " 字节). URL: " + musicUrl);
-                return null;
-            }
-            if (fileSize <= 0) {
-                plugin.getLogger().info("无法获取音乐文件大小或文件为空 (Content-Length: " + fileSize + "). URL: " + musicUrl + ". 仍尝试下载...");
-            }
-
-            try (InputStream in = connection.getInputStream()) {
-                Files.copy(in, downloadedOggFileOnServer.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            }
-            if (!downloadedOggFileOnServer.exists() || downloadedOggFileOnServer.length() == 0) {
-                plugin.getLogger().severe("音乐文件下载后不存在或为空: " + downloadedOggFileOnServer.getAbsolutePath());
-                return null;
-            }
-            plugin.getLogger().info("音乐文件下载成功: " + downloadedOggFileOnServer.getAbsolutePath() + " (" + downloadedOggFileOnServer.length() + " bytes)");
-
-            String soundEventName = "eogdmusic.online." + uniqueId;
-            String packFileNameOnServer = "temp_music_pack_" + uniqueId + ".zip";
-            File zipFileOnServer = new File(tempPackDir, packFileNameOnServer);
-
-            String packMetaContent = "{\n" +
-                    "  \"pack\": {\n" +
-                    "    \"pack_format\": 32,\n" +
-                    "    \"description\": \"EogdMusicPlayer - Online Song (" + uniqueId + ")\"\n" +
-                    "  }\n" +
-                    "}";
-            String soundJsonPathInZip = "eogd_online_music/" + oggFileNameInZip.replace(".ogg", "");
-            String soundsJsonContent = String.format("{\n" +
-                    "  \"%s\": {\n" +
-                    "    \"sounds\": [ {\"name\": \"%s\", \"stream\": true} ]\n" + // Corrected sounds.json format
-                    "  }\n" +
-                    "}", soundEventName, soundJsonPathInZip);
-
-            plugin.getLogger().info("准备创建资源包: " + zipFileOnServer.getAbsolutePath());
-            plugin.getLogger().fine("Sounds.json 内容:\n" + soundsJsonContent);
-
-            try (FileOutputStream fos = new FileOutputStream(zipFileOnServer);
-                 ZipOutputStream zos = new ZipOutputStream(fos)) {
-                zos.putNextEntry(new ZipEntry("pack.mcmeta"));
-                zos.write(packMetaContent.getBytes(StandardCharsets.UTF_8));
-                zos.closeEntry();
-                zos.putNextEntry(new ZipEntry("assets/minecraft/sounds.json"));
-                zos.write(soundsJsonContent.getBytes(StandardCharsets.UTF_8));
-                zos.closeEntry();
-                String oggZipPath = "assets/minecraft/sounds/eogd_online_music/" + oggFileNameInZip;
-                zos.putNextEntry(new ZipEntry(oggZipPath));
-                Files.copy(downloadedOggFileOnServer.toPath(), zos);
-                zos.closeEntry();
-            }
-            plugin.getLogger().info("临时资源包创建成功: " + zipFileOnServer.getAbsolutePath() + " (" + zipFileOnServer.length() + " bytes)");
-
-            String sha1;
-            try (InputStream is = Files.newInputStream(zipFileOnServer.toPath())) {
-                sha1 = DigestUtils.sha1Hex(is);
-            }
-            plugin.getLogger().info("资源包 SHA-1: " + sha1);
-
-            if (!downloadedOggFileOnServer.delete()) {
-                plugin.getLogger().warning("无法删除临时的原始 OGG 文件: " + downloadedOggFileOnServer.getAbsolutePath());
-            }
-
-            return new GeneratedPackInfo(zipFileOnServer, packFileNameOnServer, soundEventName, sha1);
-
-        } catch (MalformedURLException e) {
-            plugin.getLogger().log(Level.WARNING, "提供的音乐 URL 格式不正确: " + musicUrl, e);
-            return null;
-        } catch (IOException e) {
-            plugin.getLogger().log(Level.SEVERE, "生成在线音乐资源包时发生 IO 错误 ("+ e.getClass().getSimpleName() +"): " + musicUrl + " - " + e.getMessage());
-            if (downloadedOggFileOnServer.exists()) {
-                downloadedOggFileOnServer.delete();
-            }
-            return null;
-        } catch (Exception e) {
-            plugin.getLogger().log(Level.SEVERE, "生成在线音乐资源包时发生未知错误: " + musicUrl, e);
-            if (downloadedOggFileOnServer.exists()) {
-                downloadedOggFileOnServer.delete();
-            }
-            return null;
-        }
-    }
-
-    public boolean cleanupPack(String packFileNameOnServer) {
-        File fileToDelete = new File(tempPackDir, packFileNameOnServer);
-        if (fileToDelete.exists()) {
-            boolean deleted = fileToDelete.delete();
-            if (deleted) {
-                plugin.getLogger().info("已清理临时资源包: " + packFileNameOnServer);
-            } else {
-                plugin.getLogger().warning("无法清理临时资源包: " + packFileNameOnServer);
-            }
-            return deleted;
-        }
-        plugin.getLogger().fine("尝试清理资源包，但文件已不存在: " + packFileNameOnServer);
-        return true;
-    }
-
-    public static class GeneratedPackInfo {
-        public final File zipFileOnServer;
-        public final String zipFileNameForUrl;
-        public final String soundEventName;
-        public final String sha1;
-
-        public GeneratedPackInfo(File zipFileOnServer, String zipFileNameForUrl, String soundEventName, String sha1) {
-            this.zipFileOnServer = zipFileOnServer;
-            this.zipFileNameForUrl = zipFileNameForUrl;
-            this.soundEventName = soundEventName;
+        public PackInfo(String packUrl, String sha1, String packFileName) {
+            this.packUrl = packUrl;
             this.sha1 = sha1;
+            this.packFileName = packFileName;
+        }
+        public String getPackUrl() { return packUrl; }
+        public String getSha1() { return sha1; }
+        public String getPackFileName() { return packFileName; }
+    }
+
+
+    public ResourcePackGenerator(MusicPlayerPlugin plugin, File tempPackStorageDir, long maxDownloadSizeBytes) {
+        this.plugin = plugin;
+        this.tempPackStorageDir = tempPackStorageDir;
+        this.maxDownloadSizeBytes = maxDownloadSizeBytes;
+        if (!tempPackStorageDir.exists()) {
+            tempPackStorageDir.mkdirs();
+        }
+    }
+
+    public CompletableFuture<PackInfo> generateAndServePack(@NotNull Player player, @NotNull String audioUrl, @NotNull String soundEventName, boolean isRoomPlayback, @Nullable MusicRoom roomContext) {
+        return CompletableFuture.supplyAsync(() -> {
+            File audioFile = null;
+            File packFile = null;
+            String uniqueSuffix = UUID.randomUUID().toString().substring(0, 6);
+            String baseName = isRoomPlayback && roomContext != null ? "room_" + roomContext.getRoomId() : "player_" + player.getUniqueId().toString().substring(0,8);
+            String packFileName = baseName + "_" + uniqueSuffix + ".zip";
+
+
+            try {
+                URL url = new URL(audioUrl);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestProperty("User-Agent", "EogdMusicPlayer/" + plugin.getDescription().getVersion());
+                connection.setInstanceFollowRedirects(true);
+
+                long contentLength = connection.getContentLengthLong();
+                if (maxDownloadSizeBytes > 0 && contentLength > maxDownloadSizeBytes) {
+                    plugin.getLogger().warning("Audio file at " + audioUrl + " is too large: " + contentLength + " bytes (max: " + maxDownloadSizeBytes + ")");
+                    plugin.getServer().getScheduler().runTask(plugin, () ->
+                            plugin.sendConfigMsg(player, "messages.general.invalidUrl")
+                    );
+                    return null;
+                }
+
+                String contentType = connection.getContentType();
+                plugin.getLogger().info("Downloading " + audioUrl + " (Content-Type: " + (contentType != null ? contentType : "N/A") + ", Length: " + contentLength + ")");
+
+                audioFile = new File(tempPackStorageDir, "temp_audio_" + uniqueSuffix + ".ogg");
+                try (InputStream inputStream = connection.getInputStream()) {
+                    Files.copy(inputStream, audioFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
+                plugin.getLogger().info("Audio downloaded to: " + audioFile.getAbsolutePath());
+
+                String soundsJsonContent = createSoundsJson(soundEventName);
+                String packMcMetaContent = createPackMcMeta();
+
+                packFile = new File(tempPackStorageDir, packFileName);
+                try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(packFile))) {
+                    ZipEntry packMcMetaEntry = new ZipEntry("pack.mcmeta");
+                    zos.putNextEntry(packMcMetaEntry);
+                    zos.write(packMcMetaContent.getBytes(StandardCharsets.UTF_8));
+                    zos.closeEntry();
+
+                    ZipEntry soundsJsonEntry = new ZipEntry("assets/minecraft/sounds.json");
+                    zos.putNextEntry(soundsJsonEntry);
+                    zos.write(soundsJsonContent.getBytes(StandardCharsets.UTF_8));
+                    zos.closeEntry();
+
+                    String soundPathInZip = "assets/minecraft/sounds/" + soundEventName.replace('.', '/') + ".ogg";
+                    ZipEntry audioEntry = new ZipEntry(soundPathInZip);
+                    zos.putNextEntry(audioEntry);
+                    Files.copy(audioFile.toPath(), zos);
+                    zos.closeEntry();
+                }
+                plugin.getLogger().info("Resource pack created: " + packFile.getAbsolutePath());
+
+                String sha1;
+                try (InputStream fis = new FileInputStream(packFile)) {
+                    sha1 = DigestUtils.sha1Hex(fis);
+                }
+                plugin.getLogger().info("SHA1 for " + packFileName + ": " + sha1);
+
+                String publicAddress = plugin.getConfig().getString("httpServer.publicAddress");
+                int httpPort = plugin.getConfig().getInt("httpServer.port");
+                String packUrl = plugin.getHttpFileServer().getFileUrl(publicAddress, httpPort, packFileName);
+
+                if (isRoomPlayback && roomContext != null) {
+                    if (roomContext.getPackFileName() != null && !roomContext.getPackFileName().equals(packFileName)) {
+                        plugin.getLogger().info("Cleaning up old room pack: " + roomContext.getPackFileName() + " for room " + roomContext.getRoomId());
+                        cleanupPack(roomContext.getPackFileName());
+                    }
+                    roomContext.setPackFileName(packFileName);
+                }
+                return new PackInfo(packUrl, sha1, packFileName);
+
+            } catch (IOException e) {
+                plugin.getLogger().log(Level.SEVERE, "Error generating resource pack for URL: " + audioUrl, e);
+                if (packFile != null) packFile.delete();
+                return null;
+            } finally {
+                if (audioFile != null) {
+                    audioFile.delete();
+                }
+            }
+        });
+    }
+
+    private String createSoundsJson(String soundEventName) {
+        String soundResourcePath = soundEventName.replace('.', '/');
+        // Added "category": "music"
+        return String.format("{\n" +
+                "  \"%s\": {\n" +
+                "    \"category\": \"music\",\n" +
+                "    \"sounds\": [\n" +
+                "      {\n" +
+                "        \"name\": \"%s\",\n" +
+                "        \"stream\": true\n" +
+                "      }\n" +
+                "    ]\n" +
+                "  }\n" +
+                "}", soundEventName, soundResourcePath);
+    }
+
+    private String createPackMcMeta() {
+        int packFormat = plugin.getConfig().getInt("resourcePack.packFormat", 32);
+        String description = org.bukkit.ChatColor.translateAlternateColorCodes('&',
+                plugin.getConfig().getString("resourcePack.description", "§bMusic Player Resource Pack"));
+        return String.format("{\n" +
+                "  \"pack\": {\n" +
+                "    \"pack_format\": %d,\n" +
+                "    \"description\": \"%s\"\n" +
+                "  }\n" +
+                "}", packFormat, description.replace("\"", "\\\""));
+    }
+
+    public void cleanupPack(String packFileName) {
+        if (packFileName == null || packFileName.isEmpty()) return;
+        File packFile = new File(tempPackStorageDir, packFileName);
+        if (packFile.exists()) {
+            if (packFile.delete()) {
+                plugin.getLogger().info("Cleaned up resource pack: " + packFileName);
+            } else {
+                plugin.getLogger().warning("Failed to clean up resource pack: " + packFileName);
+            }
         }
     }
 }

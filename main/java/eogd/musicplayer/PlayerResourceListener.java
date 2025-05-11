@@ -1,88 +1,176 @@
 package eogd.musicplayer;
 
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
-import org.bukkit.SoundCategory;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerResourcePackStatusEvent;
-import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.inventory.InventoryView;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.ChatColor; // For GUI item names/lore
 
-import java.util.UUID;
-import java.util.logging.Level;
+import java.util.HashSet;
+import java.util.List;
+import java.util.stream.Collectors;
+
 
 public class PlayerResourceListener implements Listener {
 
     private final MusicPlayerPlugin plugin;
-    private final LegacyComponentSerializer legacySerializer;
+    private final MusicCommands musicCommands;
 
-    public PlayerResourceListener(MusicPlayerPlugin plugin) {
+    public PlayerResourceListener(MusicPlayerPlugin plugin, MusicCommands musicCommands) {
         this.plugin = plugin;
-        this.legacySerializer = LegacyComponentSerializer.legacySection();
-    }
-
-    private void sendMessageToPlayer(Player player, Component component) {
-        player.sendMessage(legacySerializer.serialize(component));
+        this.musicCommands = musicCommands;
     }
 
     @EventHandler
-    public void onPlayerResourcePackStatus(PlayerResourcePackStatusEvent event) {
+    public void onResourcePackStatus(PlayerResourcePackStatusEvent event) {
         Player player = event.getPlayer();
-        UUID playerId = player.getUniqueId();
         PlayerResourcePackStatusEvent.Status status = event.getStatus();
+        String pendingPackFullIdentifier = plugin.getPlayerPendingPackType(player.getUniqueId());
 
-        MusicPlayerPlugin.PendingOnlineSound pendingSound = plugin.getPendingOnlineSound(playerId);
+        if (pendingPackFullIdentifier == null) return;
 
-        if (pendingSound == null) {
-            return;
-        }
-
-        plugin.getLogger().info("玩家 " + player.getName() + " 的在线音乐资源包状态: " + status + " (针对包: " + pendingSound.packFileName + ", 事件: " + pendingSound.soundEventName + ")");
+        String[] typeParts = pendingPackFullIdentifier.split(":", 3);
+        String packType = typeParts[0];
 
         switch (status) {
             case SUCCESSFULLY_LOADED:
-                sendMessageToPlayer(player, Component.text("临时音乐资源包已加载！正在播放...", NamedTextColor.GREEN));
-                new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        if (player.isOnline()) {
-                            player.playSound(player.getLocation(), pendingSound.soundEventName, SoundCategory.RECORDS, 1.0f, 1.0f);
-                            plugin.getLogger().info("为玩家 " + player.getName() + " 播放在线声音: " + pendingSound.soundEventName);
-                        } else {
-                            plugin.getLogger().info("玩家 " + player.getName() + " 在播放前已离线，取消播放: " + pendingSound.soundEventName);
-                        }
+                plugin.sendConfigMsg(player, "messages.resourcePack.status.successfully_loaded");
+
+                if (packType.equals("singleUser")) {
+                    MusicPlayerPlugin.PendingOnlineSound pendingSound = plugin.getPendingSingleUserSound(player.getUniqueId());
+                    if (pendingSound != null) {
+                        player.playSound(player.getLocation(), pendingSound.soundEventName, 1.0f, 1.0f);
+                        plugin.clearPlayerPendingPackType(player.getUniqueId());
                     }
-                }.runTaskLater(plugin, 20L);
+                } else if (packType.equals("room") && typeParts.length >= 3) {
+                    String roomId = typeParts[1];
+                    MusicRoom room = plugin.getMusicRoom(roomId);
+                    if (room != null && room.isPlayRequestActive() && plugin.getHttpFileServer() != null) {
+                        String soundEventName = plugin.getHttpFileServer().getServePath() + ".room." + room.getRoomId();
+                        player.playSound(player.getLocation(), soundEventName, 1.0f, 1.0f);
+                        room.updateLastActivityTime();
+                        room.setStatus(MusicRoom.RoomStatus.PLAYING);
+                    }
+                    plugin.clearPlayerPendingPackType(player.getUniqueId());
+                }
                 break;
             case DECLINED:
-                sendMessageToPlayer(player, Component.text("你拒绝了临时音乐资源包。", NamedTextColor.RED));
+                plugin.sendConfigMsg(player, "messages.resourcePack.status.declined");
+                cleanupFailedOrDeclinedPack(player, pendingPackFullIdentifier);
                 break;
             case FAILED_DOWNLOAD:
-                sendMessageToPlayer(player, Component.text("临时音乐资源包下载失败。", NamedTextColor.RED));
-                plugin.getLogger().warning("玩家 " + player.getName() + " 下载资源包 " + pendingSound.packFileName + " 失败。URL可能无效或网络问题。");
+                plugin.sendConfigMsg(player, "messages.resourcePack.status.failed");
+                cleanupFailedOrDeclinedPack(player, pendingPackFullIdentifier);
                 break;
             case ACCEPTED:
-                sendMessageToPlayer(player, Component.text("正在下载临时音乐资源包...", NamedTextColor.YELLOW));
-                return;
-            case INVALID_URL:
-                sendMessageToPlayer(player, Component.text("提供的资源包 URL 无效。", NamedTextColor.RED));
-                plugin.getLogger().warning("玩家 " + player.getName() + " 收到 INVALID_URL 状态，针对包 " + pendingSound.packFileName + "。请检查插件生成的 URL 和 HTTP 服务器配置。");
+                plugin.sendConfigMsg(player, "messages.resourcePack.status.accepted");
                 break;
-            default:
-                plugin.getLogger().info("玩家 " + player.getName() + " 资源包状态未知: " + status);
-                return;
         }
+        if (status == PlayerResourcePackStatusEvent.Status.DECLINED || status == PlayerResourcePackStatusEvent.Status.FAILED_DOWNLOAD) {
+            plugin.clearPlayerPendingPackType(player.getUniqueId());
+        }
+    }
 
-        plugin.clearPendingOnlineSound(playerId);
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                if (plugin.getResourcePackGenerator() != null) {
+    private void cleanupFailedOrDeclinedPack(Player player, String pendingPackFullIdentifier) {
+        if (pendingPackFullIdentifier == null) return;
+        String[] typeParts = pendingPackFullIdentifier.split(":", 3);
+        String packType = typeParts[0];
+
+        if (packType.equals("singleUser")) {
+            MusicPlayerPlugin.PendingOnlineSound pendingSound = plugin.getPendingSingleUserSound(player.getUniqueId());
+            if (pendingSound != null && plugin.getResourcePackGenerator() != null && pendingSound.packFileName != null) {
+                if (pendingPackFullIdentifier.endsWith(pendingSound.packFileName)) {
                     plugin.getResourcePackGenerator().cleanupPack(pendingSound.packFileName);
                 }
             }
-        }.runTaskLaterAsynchronously(plugin, plugin.getConfig().getLong("httpServer.cleanupDelaySeconds", 300) * 20L);
+            plugin.clearPendingSingleUserSound(player.getUniqueId());
+        } else if (packType.equals("room") && typeParts.length >= 3) {
+            String packFileName = typeParts[2];
+            if (plugin.getResourcePackGenerator() != null && packFileName != null) {
+                plugin.getResourcePackGenerator().cleanupPack(packFileName);
+            }
+            plugin.getLogger().info("Player " + player.getName() + " failed/declined room resource pack: " + packFileName);
+        }
+    }
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player)) return;
+        Player player = (Player) event.getWhoClicked();
+        InventoryView view = event.getView();
+
+        String guiTitleFromConfig = plugin.getConfig().getString("gui.title", "§9音乐播放器");
+
+        List<PresetSong> presetSongs = plugin.getPresetSongs();
+        int totalPages = (int) Math.ceil((double) presetSongs.size() / (double) MusicGUI.ITEMS_PER_PAGE);
+        if (totalPages == 0) totalPages = 1;
+
+        MusicGUI currentGui = MusicGUI.getPlayerOpenGUI(player);
+        int currentPageForTitle = (currentGui != null) ? currentGui.getCurrentPage() : 0;
+
+        String actualGuiTitleString = guiTitleFromConfig;
+        if (totalPages > 1) {
+            actualGuiTitleString += " §7(第 " + (currentPageForTitle + 1) + "/" + totalPages + " 页)";
+        }
+        String coloredGuiTitle = ChatColor.translateAlternateColorCodes('&', actualGuiTitleString);
+
+        if (!view.getTitle().equals(coloredGuiTitle)) {
+            return;
+        }
+        event.setCancelled(true);
+        ItemStack clickedItem = event.getCurrentItem();
+        if (clickedItem == null || !clickedItem.hasItemMeta()) return;
+        ItemMeta meta = clickedItem.getItemMeta();
+        if (meta == null || !meta.hasDisplayName() || meta.getDisplayName().isEmpty()) return;
+
+        String itemName = meta.getDisplayName();
+
+        String nextPageName = ChatColor.translateAlternateColorCodes('&', plugin.getConfig().getString("gui.nextPageName", "§a下一页 ->"));
+        String prevPageName = ChatColor.translateAlternateColorCodes('&', plugin.getConfig().getString("gui.prevPageName", "§c<- 上一页"));
+
+        if (currentGui != null) {
+            if (itemName.equals(nextPageName)) {
+                currentGui.changePage(player, 1);
+            } else if (itemName.equals(prevPageName)) {
+                currentGui.changePage(player, -1);
+            } else {
+                PresetSong selectedSong = plugin.getPresetSongs().stream()
+                        .filter(song -> {
+                            String songDisplayItemName = ChatColor.translateAlternateColorCodes('&', song.getName());
+                            return songDisplayItemName.equals(itemName);
+                        })
+                        .findFirst().orElse(null);
+
+                if (selectedSong != null) {
+                    player.closeInventory();
+                    // GUI click always plays for self only
+                    musicCommands.handlePlayUrl(player, selectedSong.getUrl(), false, null);
+                }
+            }
+        }
+    }
+
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        Player player = event.getPlayer();
+        MusicPlayerPlugin.PendingOnlineSound pendingSound = plugin.getPendingSingleUserSound(player.getUniqueId());
+        if (pendingSound != null && plugin.getResourcePackGenerator() != null && pendingSound.packFileName != null) {
+            plugin.getResourcePackGenerator().cleanupPack(pendingSound.packFileName);
+        }
+        plugin.clearPendingSingleUserSound(player.getUniqueId());
+        plugin.clearPlayerPendingPackType(player.getUniqueId());
+
+        for (MusicRoom room : new HashSet<>(plugin.getActiveMusicRoomsView())) {
+            if (room.isMember(player)) {
+                room.removeMember(player);
+                plugin.getLogger().info("Player " + player.getName() + " left music room " + room.getRoomId() + " due to disconnect.");
+            }
+        }
+        MusicGUI.removePlayerOpenGUI(player);
     }
 }

@@ -1,17 +1,120 @@
-# EogdMusicPlayer 配置文件
-soundEventName: "custom.music.song1"
-resourcePackPromptMessage: "<gold>服务器音乐包可用！请接受以收听自定义音乐。</gold>"
-onlinePlayPromptMessage: "<gold>正在准备播放在线音乐，请接受临时资源包...</gold>"
-
+# HttpServer settings
 httpServer:
   enabled: true
-  # 重要: 服务器的公共可访问域名。不要包含端口号！
-  publicAddress: "play.simpfun.cn"  # <--- 你的服务器域名,请更改
-  # 这是插件 HTTP 服务器将监听的独立端口。
-  # 如果你是面板服务器，确认你的面板提供商已为你正确配置了此端口的转发。
-  # 确保这个端口与你的游戏端口不同。
-  port: 25199                       # <--- 你确认的 TCP 端口
-  servePath: "musicpacks"           # 资源包URL的路径部分, 例如 http://play.simpfun.cn:25199/musicpacks/pack.zip
+  publicAddress: ""#服务器IP地址,不带端口号
+  port: 8123 #需要一个没有被占用的TCP端口，请务必为你的服务器额外配置一个TCP端口！如果你用的是面板服务器，找服务商给你开一个新端口
+  servePath: "musicpacks"
   tempDirectory: "temp_packs"
-  maxDownloadSizeBytes: 20971520
-  cleanupDelaySeconds: 300
+  maxDownloadSizeBytes: 104857600
+  musicRoomInactiveCleanupDelaySeconds: 600
+
+# Resource pack settings
+resourcePack:
+  packFormat: 32
+  description: "§b音乐播放器资源包"
+  promptMessage: "§6请接受音乐资源包！"
+
+# Preset songs
+presetSongs:
+  song1:
+    name: "§a示例歌曲 1 §7(一首好听的歌)"
+    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+    item: "MUSIC_DISC_13"
+    lore:
+      - "§7这是一首示例歌曲"
+      - "§9点击播放！"
+  song2:
+    name: "§b在线电台示例"
+    url: "http://stream.laut.fm/BesteMusikVonHeute"
+    item: "MUSIC_DISC_CAT"
+    lore:
+      - "§6一个在线音乐电台"
+      - "§e全天候播放"
+
+# GUI Settings
+gui:
+  title: "§9音乐播放器"
+  nextPageItem: "ARROW"
+  nextPageName: "§a下一页 ->"
+  prevPageItem: "ARROW"
+  prevPageName: "§c<- 上一页"
+  noPresets: "§c没有可用的预设歌曲。"
+
+# Messages (use § or & for colors)
+messages:
+  general:
+    playerOnly: "§c此命令只能由玩家执行。"
+    noPermission: "§c你没有权限执行此命令。"
+    httpDisabled: "§cHTTP服务器未启用，此功能不可用。"
+    invalidUrl: "§c提供的URL无效或为空。"
+  bf:
+    usage: |-
+      §6EogdMusicPlayer 命令:
+      §e/bf play <歌曲名称/编号>§7 - 播放预设歌曲
+      §e/bf playurl <URL>§7 - 播放指定URL的音乐 (仅自己听)
+      §e/bf stop§7 - 停止当前为你播放的音乐
+      §e/bf gui§7 - 打开音乐播放GUI
+      §e/bf createroom <URL> <描述>§7 - 创建一个音乐室
+      §e/bf join <发起者名称>§7 - 加入一个音乐室
+      §e/bf start§7 - 为你的音乐室开始播放音乐 (仅房主)
+      §e/bf roomplay <新URL>§7 - 更新你音乐室的音乐URL (仅房主)
+      §e/bf disbandroom§7 - 解散你创建的音乐室 (仅房主)
+      §e/bf reload§7 - 重载插件配置
+      §e/bf info§7 - 查看插件信息
+    unknownCommand: "§c未知子命令。使用 /bf 获取帮助。"
+    play:
+      usage: "§6用法: /bf play <歌曲名称或编号>"
+      notFound: "§c未找到名为或编号为 '§e<song>§c' 的预设歌曲。"
+    playurl:
+      usage: "§6用法: /bf playurl <URL>"
+      preparing: "§e正在准备音乐资源包..."
+      packCreationFailed: "§c创建资源包失败。"
+      error: "§c播放音乐时发生错误。"
+    stop:
+      stoppedForSelf: "§a已为你停止播放音乐。"
+      roomStopped: "§a已停止音乐室 '§e<room_description>§a' 的音乐播放。"
+      notPlaying: "§e当前没有为你播放音乐。"
+    createroom:
+      usage: "§6用法: /bf createroom <URL> <描述>"
+      noDescription: "§c请输入音乐室的描述。"
+      alreadyCreated: "§e你已经创建了一个音乐室: §f<room_description>§e。请先解散它。"
+      successWithStartHint: "§a音乐室 '§e<description>§a' 已创建！URL: §f<url>§a。使用 §e/bf start §a开始播放。"
+      broadcast: "§b<creator_name> §a创建了音乐室 描述:§f <description> §a输入§e /bf join <creator_name> §a来加入吧！"
+    join:
+      usage: "§6用法: /bf join <发起者名称>"
+      roomNotFound: "§c未找到由 '§e<creator>§c' 发起的音乐室。"
+      alreadyCreator: "§e你已经是这个音乐室的发起者了！"
+      alreadyMember: "§e你已经是音乐室 '§f<room_description>§e' 的成员了。"
+      leftOtherRoom: "§8你已离开之前的音乐室: §7<other_room_description>"
+      successNoAutoPlay: "§a成功加入音乐室: §f<room_description>§a！等待房主开始播放音乐。"
+      internalRoomNotFound: "§c内部错误：找不到指定的音乐室ID。"
+    reload:
+      success: "§aEogdMusicPlayer 配置已重载。"
+    # info: section removed as it's now hardcoded
+    room:
+      start:
+        notRoomCreator: "§c你不是任何音乐室的创建者。"
+        noMusicUrl: "§c你的音乐室 '§e<room_description>§c' 当前没有设置音乐URL。请使用 §e/bf roomplay <URL> §c设置。"
+        startingMusic: "§a正在为音乐室 '§e<room_description>§a' 的所有成员准备并发送音乐资源包..."
+        memberStartNotification: "§6房主已开始播放音乐！请接受资源包。"
+      play:
+        usage: "§6用法: /bf roomplay <新音乐URL>"
+        notRoomCreator: "§c你不是任何音乐室的创建者。"
+        urlSet: "§a音乐室 '§e<room_description>§a' 的音乐URL已更新为: §f<url>§a。使用 §e/bf start §a开始播放。"
+        urlSame: "§e音乐室 '§f<room_description>§e' 的URL未改变。使用 §b/bf start §e重新播放。"
+    disbandroom:
+      notCreatorOrNoRoom: "§c你没有创建音乐室，或无法解散它。"
+      success: "§a音乐室 '§e<room_description>§a' 已成功解散。"
+      notifyMemberRoomDisbanded: "§e你所在的音乐室 '§f<room_description>§e' 已被创建者解散。"
+  playurl:
+    usage: "§6用法: /playurl <URL>"
+    preparing: "§e正在准备音乐资源包..."
+    packCreationFailed: "§c创建资源包失败。"
+    error: "§c播放音乐时发生错误。"
+  resourcePack:
+    status:
+      accepted: "§a资源包已接受！"
+      declined: "§c资源包被拒绝。无法播放音乐。"
+      failed: "§6资源包下载失败。请检查你的网络或服务器控制台日志。"
+      successfully_loaded: "§9资源包加载成功！"
+  musicRoomClosedMessage: "§c音乐室 '§e<description>§c' 因长时间不活动或发起者离开已关闭。"
