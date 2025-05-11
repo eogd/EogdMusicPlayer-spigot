@@ -225,7 +225,7 @@ messages:
     如果设置错误，玩家可能无法正确加载资源包。
 
 *   **Q: 音乐室的 URL 可以是直播电台吗？**
-    A: 是的，只要该 URL 是一个有效的音频流链接，插件理论上就可以处理。
+    A: 不，此插件只是将下载下来的.ogg文件打包成资源包然后分发给玩家
 
 ## 如何贡献
 如果你对 EogdMusicPlayer 项目感兴趣并希望做出贡献，我们非常欢迎！
@@ -234,9 +234,6 @@ messages:
 3.  进行修改并**提交**你的更改 (`git commit -am '添加了某个超棒的特性'`)。
 4.  将你的分支**推送**到 GitHub (`git push origin feature/YourAmazingFeature`)。
 5.  创建一个 **Pull Request**，详细描述你的更改。
-
-## 许可证
-本项目采用 [MIT 许可证](LICENSE.md)。 (请确保在你的项目根目录中包含一个 `LICENSE.md` 文件，其中包含 MIT 许可证的文本。你可以在 [choosealicense.com](https://choosealicense.com/licenses/mit/) 找到模板。)
 
 ## 许可证 
 本项目采用 [知识共享署名-非商业性使用4.0 国际许可证]（https://creativecommons.org/licenses/by-nc/4.0/） 进行许可。
