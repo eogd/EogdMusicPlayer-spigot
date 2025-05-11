@@ -90,18 +90,11 @@ resourcePack:
 presetSongs:
   song1: # 这是一个歌曲的唯一ID，你可以任意命名 (例如 popular_song, radio_stream)
     name: "§a示例歌曲 1 §7(一首好听的歌)" # 显示在GUI中的歌曲名称
-    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" # 歌曲的直接播放URL
+    url: "https://www.bigdick.ogg" # 歌曲的直接播放URL(OGG文件)
     item: "MUSIC_DISC_13" # 在GUI中代表此歌曲的物品类型 (Minecraft Item ID)
     lore: # 物品的描述文本 (可选)
       - "§7这是一首示例歌曲"
       - "§9点击播放！"
-  song2:
-    name: "§b在线电台示例"
-    url: "http://stream.laut.fm/BesteMusikVonHeute"
-    item: "MUSIC_DISC_CAT"
-    lore:
-      - "§6一个在线音乐电台"
-      - "§e全天候播放"
   # 你可以添加更多预设歌曲...
 ```
 
