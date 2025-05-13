@@ -13,7 +13,7 @@ EogdMusicPlayer 是一款功能丰富的 Spigot 插件，允许服务器管理�
 *   [故障排除](#-故障排除)
 *   [作者](#-作者)
 
-##  主要功能
+## 主要功能
 
 *   **URL 音乐播放**: 直接通过 URL 播放 .ogg 格式的音乐。
 *   **预设歌曲列表**: 在配置文件中预设常用歌曲，方便快速播放。
@@ -30,7 +30,7 @@ EogdMusicPlayer 是一款功能丰富的 Spigot 插件，允许服务器管理�
 *   **高度可配置**: 通过 `config.yml` 自定义消息、资源包参数、HTTP 服务器等。
 *   **音量控制**: 播放的音乐遵循客户端的“音乐”音量设置。
 
-## 📋 要求与依赖
+## 要求与依赖
 
 *   **Minecraft 服务器**: Spigot 1.21 或兼容的 PaperMC 等服务端。
 *   **Java**: Java 17 或更高版本。
@@ -38,14 +38,14 @@ EogdMusicPlayer 是一款功能丰富的 Spigot 插件，允许服务器管理�
     *   Gson (用于 JSON 处理)
     *   Apache Commons Codec (用于 SHA-1 哈希计算)
 
-##  安装步骤
+## 安装步骤
 
 1.  下载最新的 `EogdMusicPlayer.jar` 文件。
 2.  将 `EogdMusicPlayer.jar` 文件放入你服务器的 `plugins` 文件夹中。
 3.  启动或重启你的 Minecraft 服务器。
 4.  插件将自动生成默认的配置文件 `plugins/EogdMusicPlayer/config.yml`。
 
-##  配置 (`config.yml`)
+## 配置 (`config.yml`)
 
 插件首次加载时会自动生成 `config.yml`。以下是主要配置项的说明：
 
@@ -90,7 +90,7 @@ messages:
 *   `httpServer.publicAddress`: 如果服务器在NAT网络后（例如家庭网络），`auto` 可能无法正确检测到公网IP。你需要手动配置为你的公网IP或域名，否则玩家可能无法下载资源包。确保配置的 `httpServer.port` 在防火墙和路由器上是开放的。
 *   `resourcePack.useMergedPackLogic`: 如果设置为 `true`，你必须在 `plugins/EogdMusicPlayer/` 目录下放置一个名为 `basePackFileName` 指定的有效基础资源包文件。
 
-##  命令与权限
+## 命令与权限
 
 以下是插件的主要命令及其对应的权限节点：
 
@@ -109,7 +109,7 @@ messages:
 | `/bf reload`                                    | 重载插件配置文件。                               | `eogdmusicplayer.reload`             |
 | `/bf info`                                      | 显示插件信息。                                   | `eogdmusicplayer.info`               |
 
-##  工作原理简述
+## 工作原理简述
 
 1.  **资源包生成**:
     *   当玩家请求播放音乐时，插件会根据配置（独立模式或合并模式）动态生成一个临时的资源包。
@@ -124,7 +124,7 @@ messages:
 4.  **音乐房间**:
     *   音乐房间允许多个玩家同步收听。当房间创建者启动或更改音乐时，所有房间成员都会收到相应的资源包和播放指令。
 
-##  故障排除
+## 故障排除
 
 *   **音乐不播放/音量小**:
     *   检查服务器控制台是否有错误信息。
@@ -140,7 +140,7 @@ messages:
     *   确认 `config.yml` 中的 `httpServer.publicAddress` 设置正确（对于公网服务器，应为服务器的公网IP或域名）。
     *   确认 `httpServer.port` 已在服务器防火墙和路由器（如果适用）中开放。
 
-##  作者
+## 作者
 
 EogdMusicPlayer 由 **Eogd** 开发。
 
