@@ -1,35 +1,47 @@
 # HttpServer settings
 httpServer:
   enabled: true
-  publicAddress: ""#服务器IP地址,不带端口号
-  port: 8123 #需要一个没有被占用的TCP端口，请务必为你的服务器额外配置一个TCP端口！如果你用的是面板服务器，找服务商给你开一个新端口
+  publicAddress: "" #主机IP地址
+  port: 8123 #需要为主机开放一个没有被占用的TCP端口
   servePath: "musicpacks"
   tempDirectory: "temp_packs"
   maxDownloadSizeBytes: 104857600
   musicRoomInactiveCleanupDelaySeconds: 600
 
-# Resource pack settings
+# Base Resource Pack (Managed by EogdMusicPlayer) - OPTIONAL
+# 如果配置了此项并且文件存在，音乐将被注入到此基础包的副本中。
+# 如果未配置或文件不存在，插件将生成独立的音乐资源包。
+# 你需要把基础资源包放进插件文件夹(服务器根目录/plugins/EogdMusicPlayer/) 中
+baseResourcePack:
+  # 设置为 true 以尝试使用基础包合并逻辑。如果 fileName 无效或文件不存在，将回退到独立包模式。
+  enableMerging: false
+  fileName: "base_pack.zip"     # 基础资源包的文件名。仅当 enableMerging 为 true 时使用。
+  promptMessage: "§6加载音乐资源包..." # 发送包含音乐的资源包时的提示信息。
+  # originalPackPromptMessage 仅在 enableMerging = true 且成功加载基础包后，恢复原始基础包时使用。
+  originalPackPromptMessage: "§6恢复服务器默认资源包..."
+
+# Fallback/Independent Resource pack settings (used if baseResourcePack.enableMerging is false or base_pack.zip is not found)
+# 也用于在合并模式下，如果基础包没有 pack.mcmeta 时，提供默认的 pack_format 和 description。
 resourcePack:
-  packFormat: 32
-  description: "§b音乐播放器资源包"
-  promptMessage: "§6请接受音乐资源包！"
+  packFormat: 32 # For Minecraft 1.20.5 - 1.20.6
+  description: "§b音乐播放器资源包" # 用于独立包，或作为合并模式的备用描述
 
 # Preset songs
 presetSongs:
   song1:
-    name: "§a示例歌曲 1 §7(一首好听的歌)"
-    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+    name: "§a天真的橡皮DJ"
+    url: "https://fs-im-kefu.7moor-fs1.com/ly/4d2c3f00-7d4c-11e5-af15-41bf63ae4ea0/1746857907489/M500001tcBK93IIRzk.ogg"
     item: "MUSIC_DISC_13"
     lore:
       - "§7这是一首示例歌曲"
       - "§9点击播放！"
   song2:
-    name: "§b在线电台示例"
-    url: "http://stream.laut.fm/BesteMusikVonHeute"
+    name: "§b天地上乗有頂天"
+    url: "https://fs-im-kefu.7moor-fs1.com/ly/4d2c3f00-7d4c-11e5-af15-41bf63ae4ea0/1746857909117/M500002B21S90lruet.ogg"
     item: "MUSIC_DISC_CAT"
     lore:
-      - "§6一个在线音乐电台"
-      - "§e全天候播放"
+      - "§6fumofumo"
+      - "§e点击播放!"
 
 # GUI Settings
 gui:
@@ -47,6 +59,8 @@ messages:
     noPermission: "§c你没有权限执行此命令。"
     httpDisabled: "§cHTTP服务器未启用，此功能不可用。"
     invalidUrl: "§c提供的URL无效或为空。"
+    basePackMissing: "§e警告: 未找到配置的基础资源包，将使用独立音乐包模式。" # Changed message
+    basePackReapplyFailed: "§c恢复服务器默认资源包失败。请联系管理员。"
   bf:
     usage: |-
       §6EogdMusicPlayer 命令:
@@ -90,7 +104,6 @@ messages:
       internalRoomNotFound: "§c内部错误：找不到指定的音乐室ID。"
     reload:
       success: "§aEogdMusicPlayer 配置已重载。"
-    # info: section removed as it's now hardcoded
     room:
       start:
         notRoomCreator: "§c你不是任何音乐室的创建者。"

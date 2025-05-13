@@ -3,7 +3,7 @@ package eogd.musicplayer;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
-import org.jetbrains.annotations.NotNull;
+import org.bukkit.Bukkit;
 
 import java.io.File;
 import java.io.IOException;
@@ -17,24 +17,29 @@ public class HttpFileServer {
 
     private final MusicPlayerPlugin plugin;
     private HttpServer server;
-    private final String contextPath;
+    private final String servePathPrefix;
     private final File serveDirectory;
 
-    public HttpFileServer(MusicPlayerPlugin plugin, String contextPath, File serveDirectory) {
+    public HttpFileServer(MusicPlayerPlugin plugin, String servePathPrefixFromConfig, File serveDirectory) {
         this.plugin = plugin;
-        this.contextPath = "/" + contextPath.replaceFirst("^/", "");
+        this.servePathPrefix = servePathPrefixFromConfig;
         this.serveDirectory = serveDirectory;
     }
 
     public void start(int port) {
+        if (!serveDirectory.exists()) {
+            plugin.getLogger().severe("HTTP 服务目录不存在: " + serveDirectory.getAbsolutePath());
+            return;
+        }
         try {
             server = HttpServer.create(new InetSocketAddress(port), 0);
-            server.createContext(this.contextPath, new FileHandler(this.serveDirectory, this.plugin));
+            String contextPath = "/" + servePathPrefix.replaceAll("^/|/$", "");
+            server.createContext(contextPath, new FileHandler());
             server.setExecutor(Executors.newCachedThreadPool());
             server.start();
-            plugin.getLogger().info("HTTP File Server started on port " + port + " serving " + this.contextPath);
+            plugin.getLogger().info("HTTP 文件服务器已在端口 " + port + " 启动，上下文路径: " + contextPath);
         } catch (IOException e) {
-            plugin.getLogger().log(Level.SEVERE, "Could not start HTTP File Server on port " + port, e);
+            plugin.getLogger().log(Level.SEVERE, "启动 HTTP 文件服务器失败", e);
             server = null;
         }
     }
@@ -42,7 +47,7 @@ public class HttpFileServer {
     public void stop() {
         if (server != null) {
             server.stop(0);
-            plugin.getLogger().info("HTTP File Server stopped.");
+            plugin.getLogger().info("HTTP 文件服务器已停止。");
             server = null;
         }
     }
@@ -51,64 +56,70 @@ public class HttpFileServer {
         return server != null;
     }
 
-    public String getServePath() {
-        return contextPath.substring(1);
+    public String getFileUrl(String publicAddress, int port, String fileName) {
+        if (publicAddress == null || publicAddress.isEmpty()) {
+            publicAddress = Bukkit.getIp().isEmpty() ? "localhost" : Bukkit.getIp();
+            plugin.getLogger().warning("HTTP publicAddress 未配置，URL 可能无法从外部访问。使用: " + publicAddress);
+        }
+        String urlContextPath = "/" + servePathPrefix.replaceAll("^/|/$", "") + "/";
+        String cleanFileName = fileName.startsWith("/") ? fileName.substring(1) : fileName;
+        return "http://" + publicAddress + ":" + port + urlContextPath + cleanFileName;
     }
 
-    public String getFileUrl(@NotNull String publicAddress, int port, @NotNull String fileName) {
-        if (publicAddress.isEmpty()) {
-            plugin.getLogger().warning("Public address for HTTP server is not configured! URLs will be incomplete.");
-            return "http://<YOUR_SERVER_IP_OR_DOMAIN>:" + port + this.contextPath + "/" + fileName;
-        }
-        return "http://" + publicAddress + ":" + port + this.contextPath + "/" + fileName;
+    public File getServeDirectory() {
+        return serveDirectory;
     }
 
+    public String getServePathPrefix() {
+        return servePathPrefix;
+    }
 
-    private static class FileHandler implements HttpHandler {
-        private final File baseDir;
-        private final MusicPlayerPlugin pluginInstance;
-
-
-        public FileHandler(File baseDir, MusicPlayerPlugin plugin) {
-            this.baseDir = baseDir;
-            this.pluginInstance = plugin;
-        }
-
+    private class FileHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             String requestPath = exchange.getRequestURI().getPath();
-            String relativePath = requestPath.substring(pluginInstance.getHttpFileServer().contextPath.length());
-            if (relativePath.startsWith("/")) {
-                relativePath = relativePath.substring(1);
+            String expectedContextPath = "/" + servePathPrefix.replaceAll("^/|/$", "");
+
+            if (!requestPath.startsWith(expectedContextPath + "/")) {
+                sendError(exchange, 404, "Not Found (Invalid Path Prefix)");
+                return;
             }
 
-            File fileToServe = new File(baseDir, relativePath);
-            pluginInstance.getLogger().fine("HTTP Request: " + requestPath + " -> Trying to serve: " + fileToServe.getAbsolutePath());
+            String requestedFileName = requestPath.substring((expectedContextPath + "/").length());
+            File fileToServe = new File(serveDirectory, requestedFileName);
 
-            if (fileToServe.exists() && !fileToServe.isDirectory() && isSafePath(baseDir, fileToServe)) {
-                exchange.getResponseHeaders().set("Content-Type", "application/zip");
-                exchange.sendResponseHeaders(200, fileToServe.length());
-                try (OutputStream os = exchange.getResponseBody()) {
-                    Files.copy(fileToServe.toPath(), os);
-                }
-            } else {
-                pluginInstance.getLogger().warning("HTTP File not found or unsafe: " + fileToServe.getAbsolutePath() + " (Requested: " + requestPath + ")");
-                String response = "404 (Not Found)\n";
-                exchange.sendResponseHeaders(404, response.length());
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(response.getBytes());
-                }
+            if (!fileToServe.exists() || !fileToServe.isFile() || !isWithinServeDirectory(fileToServe)) {
+                plugin.getLogger().warning("HTTP请求的文件不存在或无效: " + fileToServe.getAbsolutePath() + " (请求路径: " + requestPath + ")");
+                sendError(exchange, 404, "File Not Found");
+                return;
+            }
+
+            exchange.getResponseHeaders().set("Content-Type", "application/zip");
+            exchange.sendResponseHeaders(200, fileToServe.length());
+            try (OutputStream os = exchange.getResponseBody()) {
+                Files.copy(fileToServe.toPath(), os);
+            } catch (IOException e) {
+                plugin.getLogger().log(Level.WARNING, "发送文件时出错: " + fileToServe.getName(), e);
+            } finally {
+                exchange.close();
             }
         }
 
-        private boolean isSafePath(File base, File potentiallyOutside) {
+        private boolean isWithinServeDirectory(File file) {
             try {
-                String basePath = base.getCanonicalPath();
-                String potentialPath = potentiallyOutside.getCanonicalPath();
-                return potentialPath.startsWith(basePath);
+                return file.getCanonicalPath().startsWith(serveDirectory.getCanonicalPath());
             } catch (IOException e) {
+                plugin.getLogger().log(Level.WARNING, "检查文件路径时出错: " + file.getPath(), e);
                 return false;
             }
+        }
+
+        private void sendError(HttpExchange exchange, int statusCode, String message) throws IOException {
+            exchange.sendResponseHeaders(statusCode, message.getBytes().length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(message.getBytes());
+            }
+            exchange.close();
         }
     }
 }

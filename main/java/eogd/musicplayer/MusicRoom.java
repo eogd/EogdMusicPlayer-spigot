@@ -20,7 +20,7 @@ public class MusicRoom {
     private long lastActivityTime;
     private RoomStatus status;
     private String packFileName;
-    private boolean playRequestActive = false; // New field
+    private boolean playRequestActive = false;
 
     public enum RoomStatus {
         ACTIVE,
@@ -49,7 +49,7 @@ public class MusicRoom {
     }
 
     public String getDescription() { return description; }
-    public void setDescription(String description) { this.description = description; } // Assumed color-translated
+    public void setDescription(String description) { this.description = description; }
     public Set<Player> getMembers() { return Collections.unmodifiableSet(members); }
 
     public void addMember(Player player) {
@@ -58,13 +58,15 @@ public class MusicRoom {
     }
 
     public void removeMember(Player player) {
-        members.remove(player);
-        this.lastActivityTime = System.currentTimeMillis();
-        if (player.equals(creator) && status != RoomStatus.CLOSING && status != RoomStatus.CLOSED) {
-            MusicPlayerPlugin plugin = JavaPlugin.getPlugin(MusicPlayerPlugin.class);
-            plugin.getLogger().info("音乐室发起者 " + creator.getName() + " 离开了音乐室 " + roomId + "。准备关闭...");
-            setStatus(RoomStatus.CLOSING);
-            Bukkit.getScheduler().runTaskLater(plugin, () -> plugin.removeMusicRoom(roomId), 20L * 2);
+        boolean removed = members.remove(player);
+        if (removed) {
+            this.lastActivityTime = System.currentTimeMillis();
+            if (player.equals(creator) && status != RoomStatus.CLOSING && status != RoomStatus.CLOSED) {
+                MusicPlayerPlugin plugin = JavaPlugin.getPlugin(MusicPlayerPlugin.class);
+                plugin.getLogger().info("音乐室发起者 " + creator.getName() + " 离开了音乐室 " + roomId + "。准备关闭...");
+                setStatus(RoomStatus.CLOSING);
+                Bukkit.getScheduler().runTaskLater(plugin, () -> plugin.removeMusicRoom(roomId), 20L * 1);
+            }
         }
     }
 
@@ -83,18 +85,17 @@ public class MusicRoom {
 
     public void stopPlaybackForPlayer(@NotNull Player player) {
         MusicPlayerPlugin plugin = JavaPlugin.getPlugin(MusicPlayerPlugin.class);
-        if (plugin.getHttpFileServer() != null) {
-            String soundEventName = plugin.getHttpFileServer().getServePath() + ".room." + this.roomId;
+        if (plugin.getHttpFileServer() != null && plugin.getHttpFileServer().isRunning()) {
+            String soundEventName = plugin.getHttpFileServer().getServePathPrefix() + ".room." + this.roomId;
             player.stopSound(soundEventName);
-            plugin.sendConfigMsg(player, "messages.bf.stop.stoppedForSelf");
         }
         updateLastActivityTime();
     }
 
     public void stopPlaybackForAll() {
         MusicPlayerPlugin plugin = JavaPlugin.getPlugin(MusicPlayerPlugin.class);
-        if (plugin.getHttpFileServer() != null) {
-            String soundEventName = plugin.getHttpFileServer().getServePath() + ".room." + this.roomId;
+        if (plugin.getHttpFileServer() != null && plugin.getHttpFileServer().isRunning()) {
+            String soundEventName = plugin.getHttpFileServer().getServePathPrefix() + ".room." + this.roomId;
             for (Player member : new HashSet<>(members)) {
                 if (member.isOnline()) {
                     member.stopSound(soundEventName);

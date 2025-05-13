@@ -1,5 +1,6 @@
 package eogd.musicplayer;
 
+import org.bukkit.SoundCategory;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -9,12 +10,11 @@ import org.bukkit.event.player.PlayerResourcePackStatusEvent;
 import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.ChatColor; // For GUI item names/lore
+import org.bukkit.ChatColor;
 
 import java.util.HashSet;
 import java.util.List;
-import java.util.stream.Collectors;
-
+import java.util.Objects;
 
 public class PlayerResourceListener implements Listener {
 
@@ -32,96 +32,98 @@ public class PlayerResourceListener implements Listener {
         PlayerResourcePackStatusEvent.Status status = event.getStatus();
         String pendingPackFullIdentifier = plugin.getPlayerPendingPackType(player.getUniqueId());
 
-        if (pendingPackFullIdentifier == null) return;
+        if (pendingPackFullIdentifier == null) {
+            return;
+        }
 
         String[] typeParts = pendingPackFullIdentifier.split(":", 3);
         String packType = typeParts[0];
+        String tempPackFileName = typeParts.length > 1 ? (packType.equals("singleUser") ? typeParts[1] : (typeParts.length > 2 ? typeParts[2] : null)) : null;
 
         switch (status) {
             case SUCCESSFULLY_LOADED:
                 plugin.sendConfigMsg(player, "messages.resourcePack.status.successfully_loaded");
+                plugin.setPlayerCurrentMusicPack(player.getUniqueId(), tempPackFileName);
 
                 if (packType.equals("singleUser")) {
                     MusicPlayerPlugin.PendingOnlineSound pendingSound = plugin.getPendingSingleUserSound(player.getUniqueId());
-                    if (pendingSound != null) {
-                        player.playSound(player.getLocation(), pendingSound.soundEventName, 1.0f, 1.0f);
-                        plugin.clearPlayerPendingPackType(player.getUniqueId());
+                    if (pendingSound != null && tempPackFileName != null && tempPackFileName.equals(pendingSound.packFileName())) {
+                        player.playSound(player.getLocation(), pendingSound.soundEventName(), SoundCategory.MUSIC, 1.0f, 1.0f);
+                        plugin.getLogger().info("播放单人音乐: " + pendingSound.soundEventName() + " 分类: MUSIC for " + player.getName());
                     }
                 } else if (packType.equals("room") && typeParts.length >= 3) {
                     String roomId = typeParts[1];
                     MusicRoom room = plugin.getMusicRoom(roomId);
-                    if (room != null && room.isPlayRequestActive() && plugin.getHttpFileServer() != null) {
-                        String soundEventName = plugin.getHttpFileServer().getServePath() + ".room." + room.getRoomId();
-                        player.playSound(player.getLocation(), soundEventName, 1.0f, 1.0f);
+                    if (room != null && room.isPlayRequestActive() && plugin.getHttpFileServer() != null &&
+                            tempPackFileName != null && Objects.equals(tempPackFileName, room.getPackFileName())) {
+                        String soundEventName = plugin.getHttpFileServer().getServePathPrefix() + ".room." + room.getRoomId();
+                        player.playSound(player.getLocation(), soundEventName, SoundCategory.MUSIC, 1.0f, 1.0f);
+                        plugin.getLogger().info("播放房间音乐: " + soundEventName + " 分类: MUSIC for " + player.getName() + " in room " + roomId);
                         room.updateLastActivityTime();
                         room.setStatus(MusicRoom.RoomStatus.PLAYING);
+                    } else if (room != null && (!room.isPlayRequestActive() || (room.getPackFileName() != null && !Objects.equals(tempPackFileName, room.getPackFileName())))) {
+                        plugin.getLogger().warning("玩家 " + player.getName() + " 加载了过时的房间资源包 " + tempPackFileName + " (房间 " + roomId + "). 正在恢复基础包。");
+                        if (tempPackFileName != null && plugin.getResourcePackGenerator() != null) {
+                            plugin.getResourcePackGenerator().cleanupPack(tempPackFileName);
+                        }
+                        plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
+                        if (plugin.shouldUseMergedPackLogic()) {
+                            plugin.sendOriginalBasePackToPlayer(player);
+                        }
                     }
-                    plugin.clearPlayerPendingPackType(player.getUniqueId());
                 }
+                plugin.clearPlayerPendingPackType(player.getUniqueId());
                 break;
             case DECLINED:
-                plugin.sendConfigMsg(player, "messages.resourcePack.status.declined");
-                cleanupFailedOrDeclinedPack(player, pendingPackFullIdentifier);
-                break;
             case FAILED_DOWNLOAD:
-                plugin.sendConfigMsg(player, "messages.resourcePack.status.failed");
-                cleanupFailedOrDeclinedPack(player, pendingPackFullIdentifier);
+                if (status == PlayerResourcePackStatusEvent.Status.DECLINED) {
+                    plugin.sendConfigMsg(player, "messages.resourcePack.status.declined");
+                } else {
+                    plugin.sendConfigMsg(player, "messages.resourcePack.status.failed");
+                }
+                if (tempPackFileName != null && plugin.getResourcePackGenerator() != null) {
+                    plugin.getResourcePackGenerator().cleanupPack(tempPackFileName);
+                }
+                if (packType.equals("singleUser")) {
+                    plugin.clearPendingSingleUserSound(player.getUniqueId());
+                }
+                plugin.clearPlayerPendingPackType(player.getUniqueId());
+                plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
+                if (plugin.shouldUseMergedPackLogic()) {
+                    plugin.sendOriginalBasePackToPlayer(player);
+                }
                 break;
             case ACCEPTED:
                 plugin.sendConfigMsg(player, "messages.resourcePack.status.accepted");
                 break;
         }
-        if (status == PlayerResourcePackStatusEvent.Status.DECLINED || status == PlayerResourcePackStatusEvent.Status.FAILED_DOWNLOAD) {
-            plugin.clearPlayerPendingPackType(player.getUniqueId());
-        }
-    }
-
-    private void cleanupFailedOrDeclinedPack(Player player, String pendingPackFullIdentifier) {
-        if (pendingPackFullIdentifier == null) return;
-        String[] typeParts = pendingPackFullIdentifier.split(":", 3);
-        String packType = typeParts[0];
-
-        if (packType.equals("singleUser")) {
-            MusicPlayerPlugin.PendingOnlineSound pendingSound = plugin.getPendingSingleUserSound(player.getUniqueId());
-            if (pendingSound != null && plugin.getResourcePackGenerator() != null && pendingSound.packFileName != null) {
-                if (pendingPackFullIdentifier.endsWith(pendingSound.packFileName)) {
-                    plugin.getResourcePackGenerator().cleanupPack(pendingSound.packFileName);
-                }
-            }
-            plugin.clearPendingSingleUserSound(player.getUniqueId());
-        } else if (packType.equals("room") && typeParts.length >= 3) {
-            String packFileName = typeParts[2];
-            if (plugin.getResourcePackGenerator() != null && packFileName != null) {
-                plugin.getResourcePackGenerator().cleanupPack(packFileName);
-            }
-            plugin.getLogger().info("Player " + player.getName() + " failed/declined room resource pack: " + packFileName);
-        }
     }
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
-        if (!(event.getWhoClicked() instanceof Player)) return;
-        Player player = (Player) event.getWhoClicked();
+        if (!(event.getWhoClicked() instanceof Player player)) return;
         InventoryView view = event.getView();
 
-        String guiTitleFromConfig = plugin.getConfig().getString("gui.title", "§9音乐播放器");
+        MusicGUI currentGui = MusicGUI.getPlayerOpenGUI(player);
+        if (currentGui == null) {
+            return;
+        }
 
         List<PresetSong> presetSongs = plugin.getPresetSongs();
         int totalPages = (int) Math.ceil((double) presetSongs.size() / (double) MusicGUI.ITEMS_PER_PAGE);
         if (totalPages == 0) totalPages = 1;
 
-        MusicGUI currentGui = MusicGUI.getPlayerOpenGUI(player);
-        int currentPageForTitle = (currentGui != null) ? currentGui.getCurrentPage() : 0;
-
-        String actualGuiTitleString = guiTitleFromConfig;
+        String guiTitleFromConfig = plugin.getConfig().getString("gui.title", "§9音乐播放器");
+        String expectedTitleString = guiTitleFromConfig;
         if (totalPages > 1) {
-            actualGuiTitleString += " §7(第 " + (currentPageForTitle + 1) + "/" + totalPages + " 页)";
+            expectedTitleString += " §7(第 " + (currentGui.getCurrentPage() + 1) + "/" + totalPages + " 页)";
         }
-        String coloredGuiTitle = ChatColor.translateAlternateColorCodes('&', actualGuiTitleString);
+        String coloredExpectedTitle = ChatColor.translateAlternateColorCodes('&', expectedTitleString);
 
-        if (!view.getTitle().equals(coloredGuiTitle)) {
+        if (!view.getTitle().equals(coloredExpectedTitle)) {
             return;
         }
+
         event.setCancelled(true);
         ItemStack clickedItem = event.getCurrentItem();
         if (clickedItem == null || !clickedItem.hasItemMeta()) return;
@@ -129,28 +131,24 @@ public class PlayerResourceListener implements Listener {
         if (meta == null || !meta.hasDisplayName() || meta.getDisplayName().isEmpty()) return;
 
         String itemName = meta.getDisplayName();
-
         String nextPageName = ChatColor.translateAlternateColorCodes('&', plugin.getConfig().getString("gui.nextPageName", "§a下一页 ->"));
         String prevPageName = ChatColor.translateAlternateColorCodes('&', plugin.getConfig().getString("gui.prevPageName", "§c<- 上一页"));
 
-        if (currentGui != null) {
-            if (itemName.equals(nextPageName)) {
-                currentGui.changePage(player, 1);
-            } else if (itemName.equals(prevPageName)) {
-                currentGui.changePage(player, -1);
-            } else {
-                PresetSong selectedSong = plugin.getPresetSongs().stream()
-                        .filter(song -> {
-                            String songDisplayItemName = ChatColor.translateAlternateColorCodes('&', song.getName());
-                            return songDisplayItemName.equals(itemName);
-                        })
-                        .findFirst().orElse(null);
+        if (itemName.equals(nextPageName)) {
+            currentGui.changePage(player, 1);
+        } else if (itemName.equals(prevPageName)) {
+            currentGui.changePage(player, -1);
+        } else {
+            PresetSong selectedSong = plugin.getPresetSongs().stream()
+                    .filter(song -> {
+                        String songDisplayItemName = ChatColor.translateAlternateColorCodes('&', song.getName());
+                        return songDisplayItemName.equals(itemName);
+                    })
+                    .findFirst().orElse(null);
 
-                if (selectedSong != null) {
-                    player.closeInventory();
-                    // GUI click always plays for self only
-                    musicCommands.handlePlayUrl(player, selectedSong.getUrl(), false, null);
-                }
+            if (selectedSong != null) {
+                player.closeInventory();
+                musicCommands.handlePlayUrl(player, selectedSong.getUrl(), false, null);
             }
         }
     }
@@ -158,17 +156,29 @@ public class PlayerResourceListener implements Listener {
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
-        MusicPlayerPlugin.PendingOnlineSound pendingSound = plugin.getPendingSingleUserSound(player.getUniqueId());
-        if (pendingSound != null && plugin.getResourcePackGenerator() != null && pendingSound.packFileName != null) {
-            plugin.getResourcePackGenerator().cleanupPack(pendingSound.packFileName);
+
+        String pendingPackFullIdentifier = plugin.getPlayerPendingPackType(player.getUniqueId());
+        if (pendingPackFullIdentifier != null) {
+            String[] typeParts = pendingPackFullIdentifier.split(":", 3);
+            String packType = typeParts[0];
+            String tempPackFileName = typeParts.length > 1 ? (packType.equals("singleUser") ? typeParts[1] : (typeParts.length > 2 ? typeParts[2] : null)) : null;
+            if (tempPackFileName != null && plugin.getResourcePackGenerator() != null) {
+                plugin.getResourcePackGenerator().cleanupPack(tempPackFileName);
+            }
         }
         plugin.clearPendingSingleUserSound(player.getUniqueId());
         plugin.clearPlayerPendingPackType(player.getUniqueId());
 
+        String currentTempMusicFile = plugin.getPlayerCurrentMusicPackFile(player.getUniqueId());
+        if (currentTempMusicFile != null && plugin.getResourcePackGenerator() != null) {
+            plugin.getResourcePackGenerator().cleanupPack(currentTempMusicFile);
+        }
+        plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
+
         for (MusicRoom room : new HashSet<>(plugin.getActiveMusicRoomsView())) {
             if (room.isMember(player)) {
                 room.removeMember(player);
-                plugin.getLogger().info("Player " + player.getName() + " left music room " + room.getRoomId() + " due to disconnect.");
+                plugin.getLogger().info("玩家 " + player.getName() + " 因断开连接离开音乐室 " + room.getRoomId());
             }
         }
         MusicGUI.removePlayerOpenGUI(player);
