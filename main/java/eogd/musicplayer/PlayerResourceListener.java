@@ -37,33 +37,59 @@ public class PlayerResourceListener implements Listener {
         }
 
         String[] typeParts = pendingPackFullIdentifier.split(":", 3);
-        String packType = typeParts[0];
-        String tempPackFileName = typeParts.length > 1 ? (packType.equals("singleUser") ? typeParts[1] : (typeParts.length > 2 ? typeParts[2] : null)) : null;
+        String packTypeOrSoundSource = typeParts[0];
+        String tempPackFileName = null;
+        String roomIdForRoomType = null;
+
+        if (packTypeOrSoundSource.equals("singleUser") && typeParts.length >= 2) {
+            tempPackFileName = typeParts[1];
+        } else if (packTypeOrSoundSource.equals("room") && typeParts.length >= 3) {
+            roomIdForRoomType = typeParts[1];
+            tempPackFileName = typeParts[2];
+        } else if (packTypeOrSoundSource.equals("preset") && typeParts.length >= 2){
+            tempPackFileName = typeParts[1];
+        }
+
 
         switch (status) {
             case SUCCESSFULLY_LOADED:
                 plugin.sendConfigMsg(player, "messages.resourcePack.status.successfully_loaded");
-                plugin.setPlayerCurrentMusicPack(player.getUniqueId(), tempPackFileName);
+                if (tempPackFileName != null) { // 只有成功加载了有效的包才设置
+                    plugin.setPlayerCurrentMusicPack(player.getUniqueId(), tempPackFileName);
+                }
 
-                if (packType.equals("singleUser")) {
+                if (packTypeOrSoundSource.equals("singleUser") || packTypeOrSoundSource.equals("preset")) {
                     MusicPlayerPlugin.PendingOnlineSound pendingSound = plugin.getPendingSingleUserSound(player.getUniqueId());
                     if (pendingSound != null && tempPackFileName != null && tempPackFileName.equals(pendingSound.packFileName())) {
                         player.playSound(player.getLocation(), pendingSound.soundEventName(), SoundCategory.MUSIC, 1.0f, 1.0f);
-                        plugin.getLogger().info("播放单人音乐: " + pendingSound.soundEventName() + " 分类: MUSIC for " + player.getName());
+                        plugin.getLogger().info("播放独立/预设音乐: " + pendingSound.soundEventName() + " for " + player.getName());
+                    } else if (pendingSound != null && (tempPackFileName == null || !tempPackFileName.equals(pendingSound.packFileName()))){
+                        plugin.getLogger().warning("玩家 " + player.getName() + " 成功加载了资源包，但待播放的独立/预设音乐信息不匹配或包文件名缺失。文件名: " + tempPackFileName + ", 期望: " + (pendingSound.packFileName() != null ? pendingSound.packFileName() : "null"));
+                        if (plugin.shouldUseMergedPackLogic()) {
+                            plugin.sendOriginalBasePackToPlayer(player);
+                        }
                     }
-                } else if (packType.equals("room") && typeParts.length >= 3) {
-                    String roomId = typeParts[1];
-                    MusicRoom room = plugin.getMusicRoom(roomId);
+                } else if (packTypeOrSoundSource.equals("room") && roomIdForRoomType != null) {
+                    MusicRoom room = plugin.getMusicRoom(roomIdForRoomType);
                     if (room != null && room.isPlayRequestActive() && plugin.getHttpFileServer() != null &&
                             tempPackFileName != null && Objects.equals(tempPackFileName, room.getPackFileName())) {
                         String soundEventName = plugin.getHttpFileServer().getServePathPrefix() + ".room." + room.getRoomId();
                         player.playSound(player.getLocation(), soundEventName, SoundCategory.MUSIC, 1.0f, 1.0f);
-                        plugin.getLogger().info("播放房间音乐: " + soundEventName + " 分类: MUSIC for " + player.getName() + " in room " + roomId);
+                        plugin.getLogger().info("播放房间音乐: " + soundEventName + " for " + player.getName() + " in room " + roomIdForRoomType);
                         room.updateLastActivityTime();
                         room.setStatus(MusicRoom.RoomStatus.PLAYING);
                     } else if (room != null && (!room.isPlayRequestActive() || (room.getPackFileName() != null && !Objects.equals(tempPackFileName, room.getPackFileName())))) {
-                        plugin.getLogger().warning("玩家 " + player.getName() + " 加载了过时的房间资源包 " + tempPackFileName + " (房间 " + roomId + "). 正在恢复基础包。");
-                        if (tempPackFileName != null && plugin.getResourcePackGenerator() != null) {
+                        plugin.getLogger().warning("玩家 " + player.getName() + " 加载了过时的房间资源包 " + tempPackFileName + " (房间 " + roomIdForRoomType + "). 正在恢复基础包。");
+                        if (tempPackFileName != null && plugin.getResourcePackGenerator() != null && !plugin.isPrewarmedPackFile(tempPackFileName)) {
+                            plugin.getResourcePackGenerator().cleanupPack(tempPackFileName);
+                        }
+                        plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
+                        if (plugin.shouldUseMergedPackLogic()) {
+                            plugin.sendOriginalBasePackToPlayer(player);
+                        }
+                    } else if (room == null) {
+                        plugin.getLogger().warning("玩家 " + player.getName() + " 加载了房间资源包，但房间 " + roomIdForRoomType + " 已不存在。");
+                        if (tempPackFileName != null && plugin.getResourcePackGenerator() != null && !plugin.isPrewarmedPackFile(tempPackFileName)) {
                             plugin.getResourcePackGenerator().cleanupPack(tempPackFileName);
                         }
                         plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
@@ -81,11 +107,16 @@ public class PlayerResourceListener implements Listener {
                 } else {
                     plugin.sendConfigMsg(player, "messages.resourcePack.status.failed");
                 }
-                if (tempPackFileName != null && plugin.getResourcePackGenerator() != null) {
+                if (tempPackFileName != null && plugin.getResourcePackGenerator() != null && !plugin.isPrewarmedPackFile(tempPackFileName)) {
                     plugin.getResourcePackGenerator().cleanupPack(tempPackFileName);
                 }
-                if (packType.equals("singleUser")) {
+                if (packTypeOrSoundSource.equals("singleUser") || packTypeOrSoundSource.equals("preset")) {
                     plugin.clearPendingSingleUserSound(player.getUniqueId());
+                } else if (packTypeOrSoundSource.equals("room") && roomIdForRoomType != null) {
+                    MusicRoom room = plugin.getMusicRoom(roomIdForRoomType);
+                    if (room != null) {
+                        room.setPlayRequestActive(false);
+                    }
                 }
                 plugin.clearPlayerPendingPackType(player.getUniqueId());
                 plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
@@ -148,7 +179,7 @@ public class PlayerResourceListener implements Listener {
 
             if (selectedSong != null) {
                 player.closeInventory();
-                musicCommands.handlePlayUrl(player, selectedSong.getUrl(), false, null);
+                musicCommands.handlePlay(player, selectedSong.getUrl(), MusicCommands.PlaybackContextType.PRESET, null, selectedSong);
             }
         }
     }
@@ -160,9 +191,13 @@ public class PlayerResourceListener implements Listener {
         String pendingPackFullIdentifier = plugin.getPlayerPendingPackType(player.getUniqueId());
         if (pendingPackFullIdentifier != null) {
             String[] typeParts = pendingPackFullIdentifier.split(":", 3);
-            String packType = typeParts[0];
-            String tempPackFileName = typeParts.length > 1 ? (packType.equals("singleUser") ? typeParts[1] : (typeParts.length > 2 ? typeParts[2] : null)) : null;
-            if (tempPackFileName != null && plugin.getResourcePackGenerator() != null) {
+            String packTypeOrSoundSource = typeParts[0];
+            String tempPackFileName = null;
+            if (packTypeOrSoundSource.equals("singleUser") && typeParts.length >= 2) tempPackFileName = typeParts[1];
+            else if (packTypeOrSoundSource.equals("room") && typeParts.length >= 3) tempPackFileName = typeParts[2];
+            else if (packTypeOrSoundSource.equals("preset") && typeParts.length >= 2) tempPackFileName = typeParts[1];
+
+            if (tempPackFileName != null && plugin.getResourcePackGenerator() != null && !plugin.isPrewarmedPackFile(tempPackFileName)) {
                 plugin.getResourcePackGenerator().cleanupPack(tempPackFileName);
             }
         }
@@ -170,7 +205,7 @@ public class PlayerResourceListener implements Listener {
         plugin.clearPlayerPendingPackType(player.getUniqueId());
 
         String currentTempMusicFile = plugin.getPlayerCurrentMusicPackFile(player.getUniqueId());
-        if (currentTempMusicFile != null && plugin.getResourcePackGenerator() != null) {
+        if (currentTempMusicFile != null && plugin.getResourcePackGenerator() != null && !plugin.isPrewarmedPackFile(currentTempMusicFile)) {
             plugin.getResourcePackGenerator().cleanupPack(currentTempMusicFile);
         }
         plugin.clearPlayerCurrentMusicPack(player.getUniqueId());

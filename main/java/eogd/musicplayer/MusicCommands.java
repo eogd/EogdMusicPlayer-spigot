@@ -19,10 +19,18 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
+
 
 public class MusicCommands implements CommandExecutor, TabCompleter {
 
     private final MusicPlayerPlugin plugin;
+
+    public enum PlaybackContextType {
+        PRESET,
+        DIRECT_URL,
+        ROOM
+    }
 
     public MusicCommands(MusicPlayerPlugin plugin) {
         this.plugin = plugin;
@@ -33,7 +41,8 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
             plugin.sendConfigMsg(sender, "messages.general.playerOnly");
             return false;
         }
-        if (!sender.hasPermission(permissionKey)) {
+        if (!sender.hasPermission(permissionKey) && !(sender instanceof org.bukkit.command.ConsoleCommandSender &&
+                (permissionKey.equals("eogdmusicplayer.reload") || permissionKey.equals("eogdmusicplayer.info")))) {
             plugin.sendConfigMsg(sender, "messages.general.noPermission");
             return false;
         }
@@ -48,7 +57,7 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                     otherRoom.removeMember(player);
                     plugin.sendConfigMsg(player, "messages.bf.join.leftOtherRoom", "other_room_description", otherRoom.getDescription());
                     String playerCurrentTempPack = plugin.getPlayerCurrentMusicPackFile(player.getUniqueId());
-                    if (otherRoom.getPackFileName() != null && otherRoom.getPackFileName().equals(playerCurrentTempPack)) {
+                    if (otherRoom.getPackFileName() != null && otherRoom.getPackFileName().equals(playerCurrentTempPack) && !plugin.isPrewarmedPackFile(playerCurrentTempPack)) {
                         plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
                         if (plugin.shouldUseMergedPackLogic()) {
                             plugin.sendOriginalBasePackToPlayer(player);
@@ -84,7 +93,7 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                             .findFirst().orElse(null);
 
                     if (preset != null) {
-                        handlePlayUrl(playerForPlay, preset.getUrl(), false, null);
+                        handlePlay(playerForPlay, preset.getUrl(), PlaybackContextType.PRESET, null, preset);
                     } else {
                         plugin.sendConfigMsg(playerForPlay, "messages.bf.play.notFound", "song", songIdentifier);
                     }
@@ -104,31 +113,30 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                     boolean stoppedSomething = false;
 
                     if (roomPlayerIsIn != null) {
+                        String roomSoundEventBase = plugin.getHttpFileServer().getServePathPrefix() + ".room." + roomPlayerIsIn.getRoomId();
                         if (roomPlayerIsIn.getCreator().equals(playerForStop)) {
                             roomPlayerIsIn.stopPlaybackForAll();
                             plugin.sendConfigMsg(playerForStop, "messages.bf.stop.roomStopped", "room_description", roomPlayerIsIn.getDescription());
-                            String roomTempPack = roomPlayerIsIn.getPackFileName();
-                            String roomSoundEvent = plugin.getHttpFileServer().getServePathPrefix() + ".room." + roomPlayerIsIn.getRoomId();
 
-                            for (Player member : new HashSet<>(roomPlayerIsIn.getMembers())) {
-                                if (member.isOnline()) {
-                                    member.stopSound(roomSoundEvent, SoundCategory.MUSIC);
-                                    String memberCurrentPack = plugin.getPlayerCurrentMusicPackFile(member.getUniqueId());
-                                    if (roomTempPack != null && roomTempPack.equals(memberCurrentPack)) {
-                                        plugin.clearPlayerCurrentMusicPack(member.getUniqueId());
-                                        if (plugin.shouldUseMergedPackLogic()) {
-                                            plugin.sendOriginalBasePackToPlayer(member);
+                            String roomTempPack = roomPlayerIsIn.getPackFileName();
+                            if (roomTempPack != null && !plugin.isPrewarmedPackFile(roomTempPack)) {
+                                for (Player member : new HashSet<>(roomPlayerIsIn.getMembers())) {
+                                    if (member.isOnline()) {
+                                        String memberCurrentPack = plugin.getPlayerCurrentMusicPackFile(member.getUniqueId());
+                                        if (roomTempPack.equals(memberCurrentPack)) {
+                                            plugin.clearPlayerCurrentMusicPack(member.getUniqueId());
+                                            if (plugin.shouldUseMergedPackLogic()) {
+                                                plugin.sendOriginalBasePackToPlayer(member);
+                                            }
                                         }
                                     }
                                 }
                             }
                             stoppedSomething = true;
                         } else {
-                            String roomSoundEvent = plugin.getHttpFileServer().getServePathPrefix() + ".room." + roomPlayerIsIn.getRoomId();
-                            playerForStop.stopSound(roomSoundEvent, SoundCategory.MUSIC);
-
+                            playerForStop.stopSound(roomSoundEventBase, SoundCategory.MUSIC);
                             String memberCurrentPack = plugin.getPlayerCurrentMusicPackFile(playerForStop.getUniqueId());
-                            if (roomPlayerIsIn.getPackFileName() != null && roomPlayerIsIn.getPackFileName().equals(memberCurrentPack)) {
+                            if (roomPlayerIsIn.getPackFileName() != null && roomPlayerIsIn.getPackFileName().equals(memberCurrentPack) && !plugin.isPrewarmedPackFile(memberCurrentPack)) {
                                 plugin.clearPlayerCurrentMusicPack(playerForStop.getUniqueId());
                                 if (plugin.shouldUseMergedPackLogic()) {
                                     plugin.sendOriginalBasePackToPlayer(playerForStop);
@@ -138,40 +146,36 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                             stoppedSomething = true;
                         }
                     } else {
-                        String currentTempPack = plugin.getPlayerCurrentMusicPackFile(playerForStop.getUniqueId());
                         MusicPlayerPlugin.PendingOnlineSound pendingSoundInfo = plugin.getPendingSingleUserSound(playerForStop.getUniqueId());
+                        String currentTempPack = plugin.getPlayerCurrentMusicPackFile(playerForStop.getUniqueId());
 
-                        if (currentTempPack != null && pendingSoundInfo != null && currentTempPack.equals(pendingSoundInfo.packFileName())) {
+                        if (pendingSoundInfo != null) {
                             playerForStop.stopSound(pendingSoundInfo.soundEventName(), SoundCategory.MUSIC);
                             plugin.getLogger().info("停止独立音乐: " + pendingSoundInfo.soundEventName() + " for " + playerForStop.getName());
-
-                            if (plugin.getResourcePackGenerator() != null) {
-                                plugin.getResourcePackGenerator().cleanupPack(currentTempPack);
-                            }
-                            plugin.clearPlayerCurrentMusicPack(playerForStop.getUniqueId());
-                            plugin.clearPendingSingleUserSound(playerForStop.getUniqueId());
-
-                            if (plugin.shouldUseMergedPackLogic()) {
-                                plugin.sendOriginalBasePackToPlayer(playerForStop);
-                            }
-                            plugin.sendConfigMsg(playerForStop, "messages.bf.stop.stoppedForSelf");
-                            stoppedSomething = true;
-                        } else if (pendingSoundInfo != null && pendingSoundInfo.packFileName() != null) {
-                            playerForStop.stopSound(pendingSoundInfo.soundEventName(), SoundCategory.MUSIC);
-                            plugin.getLogger().info("尝试停止待处理/失败的独立音乐: " + pendingSoundInfo.soundEventName() + " for " + playerForStop.getName());
-
-                            if (plugin.getResourcePackGenerator() != null) {
+                            if (pendingSoundInfo.packFileName() != null && plugin.getResourcePackGenerator() != null && !plugin.isPrewarmedPackFile(pendingSoundInfo.packFileName())) {
                                 plugin.getResourcePackGenerator().cleanupPack(pendingSoundInfo.packFileName());
                             }
                             plugin.clearPendingSingleUserSound(playerForStop.getUniqueId());
-                            plugin.clearPlayerPendingPackType(playerForStop.getUniqueId());
-                            plugin.clearPlayerCurrentMusicPack(playerForStop.getUniqueId());
+                            stoppedSomething = true;
+                        }
+                        if (currentTempPack != null && !plugin.isPrewarmedPackFile(currentTempPack)) {
+                            boolean isRoomPack = plugin.getActiveMusicRoomsView().stream().anyMatch(r -> currentTempPack.equals(r.getPackFileName()));
+                            if (!isRoomPack) {
+                                if (plugin.getResourcePackGenerator() != null) {
+                                    plugin.getResourcePackGenerator().cleanupPack(currentTempPack);
+                                }
+                                plugin.getLogger().info("清理当前玩家独立音乐包: " + currentTempPack + " for " + playerForStop.getName());
+                                if (!stoppedSomething) stoppedSomething = true;
+                            }
+                        }
 
+                        if (stoppedSomething) {
+                            plugin.clearPlayerCurrentMusicPack(playerForStop.getUniqueId());
+                            plugin.clearPlayerPendingPackType(playerForStop.getUniqueId());
                             if (plugin.shouldUseMergedPackLogic()) {
                                 plugin.sendOriginalBasePackToPlayer(playerForStop);
                             }
                             plugin.sendConfigMsg(playerForStop, "messages.bf.stop.stoppedForSelf");
-                            stoppedSomething = true;
                         }
                     }
 
@@ -218,9 +222,11 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                             "url", newRoom.getMusicUrl()
                     );
                     for (Player onlinePlayer : Bukkit.getOnlinePlayers()) {
-                        plugin.sendConfigMsg(onlinePlayer, "messages.bf.createroom.broadcast",
-                                "creator_name", creator.getName(),
-                                "description", newRoom.getDescription());
+                        if (!onlinePlayer.equals(creator)) {
+                            plugin.sendConfigMsg(onlinePlayer, "messages.bf.createroom.broadcast",
+                                    "creator_name", creator.getName(),
+                                    "description", newRoom.getDescription());
+                        }
                     }
                     return true;
 
@@ -250,11 +256,10 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                     handleLeavePreviousRoom(joiner, targetRoom);
 
                     targetRoom.addMember(joiner);
+                    plugin.sendConfigMsg(joiner, "messages.bf.join.successNoAutoPlay", "room_description", targetRoom.getDescription());
+
                     if (targetRoom.getStatus() == MusicRoom.RoomStatus.PLAYING && targetRoom.getPackFileName() != null) {
-                        plugin.sendConfigMsg(joiner, "messages.bf.join.successNoAutoPlay", "room_description", targetRoom.getDescription());
-                        handlePlayUrl(joiner, targetRoom.getMusicUrl(), true, targetRoom);
-                    } else {
-                        plugin.sendConfigMsg(joiner, "messages.bf.join.successNoAutoPlay", "room_description", targetRoom.getDescription());
+                        handlePlay(joiner, targetRoom.getMusicUrl(), PlaybackContextType.ROOM, targetRoom, null);
                     }
                     return true;
 
@@ -275,18 +280,20 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
 
                     roomToStart.setPlayRequestActive(true);
                     String memberNotification = plugin.getConfig().getString("messages.bf.room.start.memberStartNotification");
+
                     for (Player member : new ArrayList<>(roomToStart.getMembers())) {
                         if (member.isOnline()) {
-                            handlePlayUrl(member, roomToStart.getMusicUrl(), true, roomToStart);
-                            if (!member.equals(roomStarter) && memberNotification != null) {
-                                plugin.sendLegacyMsg(member, memberNotification);
+                            handlePlay(member, roomToStart.getMusicUrl(), PlaybackContextType.ROOM, roomToStart, null);
+                            if (!member.equals(roomStarter) && memberNotification != null && !memberNotification.isEmpty()) {
+                                plugin.sendLegacyMsg(member, memberNotification, "room_description", roomToStart.getDescription(), "creator_name", roomToStart.getCreator().getName());
                             }
                         }
                     }
+                    plugin.sendConfigMsg(roomStarter, "messages.bf.room.start.started", "room_description", roomToStart.getDescription());
                     return true;
 
                 case "roomplay":
-                    if (!canExecute(sender, "eogdmusicplayer.roomplay", true)) return true;
+                    if (!canExecute(sender, "eogdmusicplayer.room.roomplay", true)) return true;
                     if (!(sender instanceof Player roomPlayRequester)) return true;
                     MusicRoom ownRoom = plugin.getActiveMusicRoomsView().stream()
                             .filter(r -> r.getCreator().equals(roomPlayRequester))
@@ -304,24 +311,25 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                         plugin.sendConfigMsg(roomPlayRequester, "messages.bf.room.play.urlSame", "room_description", ownRoom.getDescription());
                         return true;
                     }
-                    String oldRoomSoundEvent = plugin.getHttpFileServer().getServePathPrefix() + ".room." + ownRoom.getRoomId();
+
                     if (ownRoom.getStatus() == MusicRoom.RoomStatus.PLAYING || ownRoom.isPlayRequestActive()) {
                         ownRoom.stopPlaybackForAll();
                         String oldRoomTempPack = ownRoom.getPackFileName();
-                        for(Player member : new HashSet<>(ownRoom.getMembers())) {
-                            if(member.isOnline()) {
-                                member.stopSound(oldRoomSoundEvent, SoundCategory.MUSIC);
-                                String memberCurrentPack = plugin.getPlayerCurrentMusicPackFile(member.getUniqueId());
-                                if (oldRoomTempPack != null && oldRoomTempPack.equals(memberCurrentPack)) {
-                                    plugin.clearPlayerCurrentMusicPack(member.getUniqueId());
-                                    if (plugin.shouldUseMergedPackLogic()) {
-                                        plugin.sendOriginalBasePackToPlayer(member);
+                        if (oldRoomTempPack != null && !plugin.isPrewarmedPackFile(oldRoomTempPack)) {
+                            for(Player member : new HashSet<>(ownRoom.getMembers())) {
+                                if(member.isOnline()) {
+                                    String memberCurrentPack = plugin.getPlayerCurrentMusicPackFile(member.getUniqueId());
+                                    if (oldRoomTempPack.equals(memberCurrentPack)) {
+                                        plugin.clearPlayerCurrentMusicPack(member.getUniqueId());
+                                        if (plugin.shouldUseMergedPackLogic()) {
+                                            plugin.sendOriginalBasePackToPlayer(member);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        if (oldRoomTempPack != null && plugin.getResourcePackGenerator() != null) {
-                            plugin.getResourcePackGenerator().cleanupPack(oldRoomTempPack);
+                            if (plugin.getResourcePackGenerator() != null) {
+                                plugin.getResourcePackGenerator().cleanupPack(oldRoomTempPack);
+                            }
                         }
                         ownRoom.setPackFileName(null);
                     }
@@ -365,6 +373,7 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                     sender.sendMessage(ChatColor.AQUA + "作者: " + ChatColor.WHITE + String.join(", ", pdf.getAuthors()));
                     sender.sendMessage(ChatColor.AQUA + "版本: " + ChatColor.WHITE + pdf.getVersion());
                     sender.sendMessage(ChatColor.AQUA + "描述: " + ChatColor.WHITE + (pdf.getDescription() != null ? pdf.getDescription() : "N/A"));
+                    sender.sendMessage(ChatColor.AQUA + "预设预热: " + ChatColor.WHITE + (plugin.isPresetPrewarmingEnabled() ? "开启" : "关闭"));
                     sender.sendMessage(ChatColor.GOLD + "-----------------------------");
                     return true;
 
@@ -383,13 +392,10 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
             if (roomToJoin != null) {
                 if (!roomToJoin.isMember(playerToJoin) && !roomToJoin.getCreator().equals(playerToJoin)) {
                     handleLeavePreviousRoom(playerToJoin, roomToJoin);
-
                     roomToJoin.addMember(playerToJoin);
+                    plugin.sendConfigMsg(playerToJoin, "messages.bf.join.successNoAutoPlay", "room_description", roomToJoin.getDescription());
                     if (roomToJoin.getStatus() == MusicRoom.RoomStatus.PLAYING && roomToJoin.getPackFileName() != null) {
-                        plugin.sendConfigMsg(playerToJoin, "messages.bf.join.successNoAutoPlay", "room_description", roomToJoin.getDescription());
-                        handlePlayUrl(playerToJoin, roomToJoin.getMusicUrl(), true, roomToJoin);
-                    } else {
-                        plugin.sendConfigMsg(playerToJoin, "messages.bf.join.successNoAutoPlay", "room_description", roomToJoin.getDescription());
+                        handlePlay(playerToJoin, roomToJoin.getMusicUrl(), PlaybackContextType.ROOM, roomToJoin, null);
                     }
                 } else {
                     plugin.sendConfigMsg(playerToJoin, "messages.bf.join.alreadyMember", "room_description", roomToJoin.getDescription());
@@ -404,12 +410,23 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
 
     private boolean handlePlayUrlCommandLogic(CommandSender sender, String[] args, boolean isFromBfCommand) {
         if (!(sender instanceof Player player)) return true;
-        String urlToPlay = isFromBfCommand ? args[1] : args[0];
-        handlePlayUrl(player, urlToPlay, false, null);
+        String urlToPlay;
+        if (isFromBfCommand) {
+            if (args.length < 2) {
+                plugin.sendConfigMsg(player, "messages.bf.playurl.usage"); return true;
+            }
+            urlToPlay = args[1];
+        } else {
+            if (args.length < 1) {
+                plugin.sendConfigMsg(player, "messages.playurl.usage"); return true;
+            }
+            urlToPlay = args[0];
+        }
+        handlePlay(player, urlToPlay, PlaybackContextType.DIRECT_URL, null, null);
         return true;
     }
 
-    public void handlePlayUrl(Player player, String url, boolean isRoomPlayback, @Nullable MusicRoom roomContext) {
+    public void handlePlay(Player player, String url, PlaybackContextType contextType, @Nullable MusicRoom roomContext, @Nullable PresetSong presetContext) {
         if (plugin.getResourcePackGenerator() == null || plugin.getHttpFileServer() == null || !plugin.getHttpFileServer().isRunning()) {
             plugin.sendConfigMsg(player, "messages.general.httpDisabled");
             return;
@@ -423,57 +440,46 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
             return;
         }
 
-        if (!isRoomPlayback) {
+        MusicRoom currentRoomPlayerIsIn = plugin.getActiveMusicRoomsView().stream().filter(r -> r.isMember(player)).findFirst().orElse(null);
+        if (contextType != PlaybackContextType.ROOM || roomContext == null || !roomContext.equals(currentRoomPlayerIsIn)) {
             MusicPlayerPlugin.PendingOnlineSound existingSingleSound = plugin.getPendingSingleUserSound(player.getUniqueId());
-            if (existingSingleSound != null && plugin.getPlayerCurrentMusicPackFile(player.getUniqueId()) != null) {
+            if (existingSingleSound != null) {
                 player.stopSound(existingSingleSound.soundEventName(), SoundCategory.MUSIC);
-                plugin.getLogger().info("播放新独立音乐前停止旧的: " + existingSingleSound.soundEventName() + " for " + player.getName());
-                if (plugin.getResourcePackGenerator() != null && existingSingleSound.packFileName() != null) {
+                if (existingSingleSound.packFileName() != null && plugin.getResourcePackGenerator() != null && !plugin.isPrewarmedPackFile(existingSingleSound.packFileName())) {
                     plugin.getResourcePackGenerator().cleanupPack(existingSingleSound.packFileName());
                 }
                 plugin.clearPendingSingleUserSound(player.getUniqueId());
                 plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
-            } else if (existingSingleSound != null && existingSingleSound.packFileName() != null) {
-                if (plugin.getResourcePackGenerator() != null) {
-                    plugin.getResourcePackGenerator().cleanupPack(existingSingleSound.packFileName());
-                }
-                plugin.clearPendingSingleUserSound(player.getUniqueId());
-            }
-        }
-
-        String existingPlayerMusicPack = plugin.getPlayerCurrentMusicPackFile(player.getUniqueId());
-        if (existingPlayerMusicPack != null) {
-            if (!isRoomPlayback) {
-                boolean isAnActiveRoomPack = plugin.getActiveMusicRoomsView().stream().anyMatch(r -> existingPlayerMusicPack.equals(r.getPackFileName()));
-                if (!isAnActiveRoomPack) {
-                    plugin.getResourcePackGenerator().cleanupPack(existingPlayerMusicPack);
-                    plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
-                }
-            } else if (roomContext != null && !existingPlayerMusicPack.equals(roomContext.getPackFileName())) {
-                boolean isAnotherActiveRoomPack = plugin.getActiveMusicRoomsView().stream()
-                        .filter(r -> !r.equals(roomContext))
-                        .anyMatch(r -> existingPlayerMusicPack.equals(r.getPackFileName()));
-                if (!isAnotherActiveRoomPack) {
-                    plugin.getResourcePackGenerator().cleanupPack(existingPlayerMusicPack);
+            } else {
+                String currentPack = plugin.getPlayerCurrentMusicPackFile(player.getUniqueId());
+                if (currentPack != null && !plugin.isPrewarmedPackFile(currentPack) &&
+                        (currentRoomPlayerIsIn == null || !currentPack.equals(currentRoomPlayerIsIn.getPackFileName())) ) {
+                    player.stopSound(SoundCategory.MUSIC);
+                    if (plugin.getResourcePackGenerator() != null) {
+                        plugin.getResourcePackGenerator().cleanupPack(currentPack);
+                    }
                     plugin.clearPlayerCurrentMusicPack(player.getUniqueId());
                 }
             }
         }
 
-        String packTypeIdentifier;
+
         String soundEventName;
-        if (isRoomPlayback && roomContext != null) {
-            packTypeIdentifier = "room." + roomContext.getRoomId();
+
+        if (contextType == PlaybackContextType.PRESET && presetContext != null) {
+            soundEventName = plugin.getHttpFileServer().getServePathPrefix() + ".preset." + plugin.createStableIdentifier(presetContext.getUrl());
+            plugin.sendConfigMsg(player, "messages.bf.play.preparing", "song_name", ChatColor.translateAlternateColorCodes('&', presetContext.getName()));
+        } else if (contextType == PlaybackContextType.ROOM && roomContext != null) {
+            soundEventName = plugin.getHttpFileServer().getServePathPrefix() + ".room." + roomContext.getRoomId();
+            plugin.sendConfigMsg(player, "messages.bf.room.start.startingMusic", "room_description", roomContext.getDescription());
         } else {
-            packTypeIdentifier = "single." + player.getUniqueId().toString().substring(0,8) + "." + UUID.randomUUID().toString().substring(0,4);
+            String randomId = UUID.randomUUID().toString().substring(0, 4);
+            String uniquePlayerIdPart = player.getUniqueId().toString().substring(0, 8);
+            soundEventName = plugin.getHttpFileServer().getServePathPrefix() + ".single." + uniquePlayerIdPart + "." + randomId;
+            plugin.sendConfigMsg(player, "messages.playurl.preparing");
         }
-        soundEventName = plugin.getHttpFileServer().getServePathPrefix() + "." + packTypeIdentifier;
 
-        plugin.sendConfigMsg(player, isRoomPlayback ? "messages.bf.room.start.startingMusic" : "messages.playurl.preparing",
-                roomContext != null ? "room_description" : null,
-                roomContext != null ? roomContext.getDescription() : null);
-
-        plugin.getResourcePackGenerator().generateAndServePack(player, url, soundEventName, isRoomPlayback, roomContext)
+        plugin.getResourcePackGenerator().generateAndServePack(player, url, soundEventName, contextType == PlaybackContextType.ROOM, roomContext)
                 .thenAccept(packInfo -> {
                     if (packInfo != null) {
                         Bukkit.getScheduler().runTask(plugin, () -> {
@@ -485,13 +491,15 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                                 plugin.getLogger().log(Level.SEVERE, "无效的SHA-1哈希值: " + packInfo.sha1(), e);
                                 plugin.sendConfigMsg(player, "messages.playurl.error");
                                 if (roomContext != null) roomContext.setPlayRequestActive(false);
-                                plugin.getResourcePackGenerator().cleanupPack(packInfo.packFileName());
+                                if (!plugin.isPrewarmedPackFile(packInfo.packFileName())) {
+                                    plugin.getResourcePackGenerator().cleanupPack(packInfo.packFileName());
+                                }
                                 if (plugin.shouldUseMergedPackLogic()) plugin.sendOriginalBasePackToPlayer(player);
                                 return;
                             }
                             player.setResourcePack(packInfo.packUrl(), sha1Bytes, promptMessage, true);
 
-                            if (isRoomPlayback && roomContext != null) {
+                            if (contextType == PlaybackContextType.ROOM && roomContext != null) {
                                 plugin.markPlayerPendingRoomPack(player.getUniqueId(), roomContext.getRoomId(), packInfo.packFileName());
                             } else {
                                 plugin.addPendingSingleUserSound(player.getUniqueId(),
@@ -501,16 +509,15 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                     } else {
                         plugin.sendConfigMsg(player, "messages.playurl.packCreationFailed");
                         if (roomContext != null) roomContext.setPlayRequestActive(false);
-                        if (plugin.shouldUseMergedPackLogic()) plugin.sendOriginalBasePackToPlayer(player);
                     }
                 }).exceptionally(ex -> {
-                    plugin.getLogger().log(Level.WARNING, "生成/服务包时出错 for " + player.getName() + ": " + ex.getMessage(), ex);
+                    plugin.getLogger().log(Level.WARNING, "处理播放请求时出错 for " + player.getName() + " (URL: " + url + "): " + ex.getMessage(), ex);
                     plugin.sendConfigMsg(player, "messages.playurl.error");
                     if (roomContext != null) roomContext.setPlayRequestActive(false);
-                    if (plugin.shouldUseMergedPackLogic()) plugin.sendOriginalBasePackToPlayer(player);
                     return null;
                 });
     }
+
 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String alias, @NotNull String[] args) {
@@ -522,7 +529,7 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                 if (sender instanceof Player p) {
                     subCommands.removeIf(cmd -> {
                         String perm = "eogdmusicplayer." + cmd;
-                        if (cmd.equals("start")) perm = "eogdmusicplayer.room.start";
+                        if (cmd.equals("start") || cmd.equals("roomplay")) perm = "eogdmusicplayer.room." + cmd;
                         return !p.hasPermission(perm);
                     });
                 } else {
@@ -535,10 +542,13 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                 String input = args[1].toLowerCase();
                 if (subCommand.equals("play") && sender.hasPermission("eogdmusicplayer.play")) {
                     plugin.getPresetSongs().forEach(song -> {
-                        completions.add(String.valueOf(plugin.getPresetSongs().indexOf(song) + 1));
-                        String cleanName = ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', song.getName()));
+                        String songIndexStr = String.valueOf(plugin.getPresetSongs().indexOf(song) + 1);
+                        if (songIndexStr.startsWith(input)) {
+                            completions.add(songIndexStr);
+                        }
+                        String cleanName = ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', song.getName())).replace(" ", "_");
                         if (cleanName.toLowerCase().startsWith(input)) {
-                            completions.add(cleanName.replace(" ", "_"));
+                            completions.add(cleanName);
                         }
                     });
                 } else if (subCommand.equals("join") && sender.hasPermission("eogdmusicplayer.joinroom")) {
@@ -547,10 +557,27 @@ public class MusicCommands implements CommandExecutor, TabCompleter {
                             .filter(name -> name.toLowerCase().startsWith(input))
                             .distinct()
                             .forEach(completions::add);
+                } else if ((subCommand.equals("playurl") && sender.hasPermission("eogdmusicplayer.playurl")) ||
+                        (subCommand.equals("roomplay") && sender.hasPermission("eogdmusicplayer.room.roomplay")) ||
+                        (subCommand.equals("createroom") && sender.hasPermission("eogdmusicplayer.createroom") && args.length == 2 ) ) {
+                    if (input.isEmpty() || input.startsWith("http")) {
+                        completions.add("http://");
+                        completions.add("https://");
+                    }
+                }
+            } else if (args.length == 3 && args[0].equalsIgnoreCase("createroom") && sender.hasPermission("eogdmusicplayer.createroom")) {
+                completions.add("<房间描述>");
+            }
+        } else if (command.getName().equalsIgnoreCase("playurl") && args.length == 1) {
+            if (sender.hasPermission("eogdmusicplayer.playurl")) {
+                String input = args[0].toLowerCase();
+                if (input.isEmpty() || input.startsWith("http")) {
+                    completions.add("http://");
+                    completions.add("https://");
                 }
             }
         }
-        return completions;
+        return completions.stream().distinct().collect(Collectors.toList());
     }
 
     private void addMatchingCompletions(List<String> completions, String input, String... options) {

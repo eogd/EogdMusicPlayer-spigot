@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.bukkit.entity.Player;
+import org.bukkit.ChatColor;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -55,8 +56,22 @@ public class ResourcePackGenerator {
             }
         }
     }
+    public File getTempPackStorageDir() {
+        return tempPackStorageDir;
+    }
 
-    public CompletableFuture<PackInfo> generateAndServePack(@NotNull Player player, @NotNull String audioUrl, @NotNull String soundEventName, boolean isRoomPlayback, @Nullable MusicRoom roomContext) {
+
+    public CompletableFuture<PackInfo> generateAndServePack(@Nullable Player player, @NotNull String audioUrl, @NotNull String soundEventName, boolean isRoomPlayback, @Nullable MusicRoom roomContext) {
+        if (player != null && plugin.isPresetPrewarmingEnabled() && !isRoomPlayback && soundEventName.startsWith(plugin.getHttpFileServer().getServePathPrefix() + ".preset.")) {
+            ResourcePackGenerator.PackInfo prewarmedInfo = plugin.getPrewarmedPackInfo(audioUrl);
+            if (prewarmedInfo != null) {
+                plugin.getLogger().info("为玩家 " + player.getName() + " 使用预热的资源包: " + prewarmedInfo.packFileName() + " (URL: " + audioUrl + ")");
+                return CompletableFuture.completedFuture(prewarmedInfo);
+            } else {
+                plugin.getLogger().warning("预热已启用，但未找到预设歌曲 " + audioUrl + " 的预热包 (请求的 soundEvent: " + soundEventName + ")。将按需生成。");
+            }
+        }
+
         return CompletableFuture.supplyAsync(() -> {
             boolean actuallyUseMerging = plugin.shouldUseMergedPackLogic() && originalBasePackFile != null && originalBasePackFile.exists();
             if (actuallyUseMerging) {
@@ -74,19 +89,20 @@ public class ResourcePackGenerator {
             HttpURLConnection connection = (HttpURLConnection) audioSourceUrl.openConnection();
             connection.setRequestProperty("User-Agent", "EogdMusicPlayer/" + plugin.getDescription().getVersion());
             connection.setInstanceFollowRedirects(true);
-            connection.setConnectTimeout(5000);
-            connection.setReadTimeout(10000);
+            connection.setConnectTimeout(plugin.getConfig().getInt("httpServer.downloadConnectTimeoutMillis", 5000));
+            connection.setReadTimeout(plugin.getConfig().getInt("httpServer.downloadReadTimeoutMillis", 10000));
+
 
             int responseCode = connection.getResponseCode();
-            if (responseCode != HttpURLConnection.HTTP_OK) {
+            if (responseCode != HttpURLConnection.HTTP_OK && responseCode != HttpURLConnection.HTTP_MOVED_TEMP && responseCode != HttpURLConnection.HTTP_MOVED_PERM) {
                 plugin.getLogger().warning("下载音频文件 " + audioUrl + " 失败。响应码: " + responseCode + " (" + connection.getResponseMessage() + ")");
-                return new DownloadedAudioInfo(tempAudioFile, "messages.general.invalidUrl");
+                return new DownloadedAudioInfo(tempAudioFile, "messages.general.downloadFailedResponse");
             }
 
             long contentLength = connection.getContentLengthLong();
             if (maxDownloadSizeBytes > 0 && contentLength > maxDownloadSizeBytes) {
                 plugin.getLogger().warning("音频文件 " + audioUrl + " 过大 (" + modeIdentifier + " 模式): " + contentLength + " bytes (max: " + maxDownloadSizeBytes + ")");
-                return new DownloadedAudioInfo(tempAudioFile, "messages.general.invalidUrl");
+                return new DownloadedAudioInfo(tempAudioFile, "messages.general.fileTooLarge");
             }
 
             try (InputStream inputStream = connection.getInputStream()) {
@@ -95,23 +111,38 @@ public class ResourcePackGenerator {
             return new DownloadedAudioInfo(tempAudioFile, null);
         } catch (IOException e) {
             plugin.getLogger().log(Level.WARNING, "下载或保存音频文件 " + audioUrl + " 时出错 (" + modeIdentifier + " 模式): " + e.getMessage());
-            return new DownloadedAudioInfo(tempAudioFile, "messages.general.invalidUrl");
+            return new DownloadedAudioInfo(tempAudioFile, "messages.general.downloadException");
         }
     }
 
-    private PackInfo generateMergedPack(@NotNull Player player, @NotNull String audioUrl, @NotNull String soundEventName, boolean isRoomPlayback, @Nullable MusicRoom roomContext) {
+    private PackInfo generateMergedPack(@Nullable Player player, @NotNull String audioUrl, @NotNull String soundEventName, boolean isRoomPlayback, @Nullable MusicRoom roomContext) {
         if (originalBasePackFile == null) {
             plugin.getLogger().severe("generateMergedPack called with null originalBasePackFile!");
             return null;
         }
-        String uniqueSuffix = UUID.randomUUID().toString().substring(0, 8);
-        File tempMergedPackFile = new File(tempPackStorageDir, (isRoomPlayback && roomContext != null ? "mroom_" + roomContext.getRoomId() : "player_" + player.getUniqueId().toString().substring(0, 8)) + "_music_merged_" + uniqueSuffix + ".zip");
+        String uniqueSuffix = plugin.createStableIdentifier(audioUrl + "_" + soundEventName);
+        String packFileNamePrefix = "mrg_";
+        if (player == null && soundEventName.startsWith(plugin.getHttpFileServer().getServePathPrefix() + ".preset.")) {
+            packFileNamePrefix += "prewarm_preset_";
+        } else if (isRoomPlayback && roomContext != null) {
+            packFileNamePrefix += "room_" + roomContext.getRoomId() + "_";
+        } else if (player != null) {
+            packFileNamePrefix += "player_" + player.getUniqueId().toString().substring(0, 8) + "_";
+        } else {
+            packFileNamePrefix += "unknown_";
+        }
+
+        File tempMergedPackFile = new File(tempPackStorageDir, packFileNamePrefix + uniqueSuffix + ".zip");
         File tempAudioFile = null;
 
         try {
             DownloadedAudioInfo audioInfo = downloadAudioFile(audioUrl, uniqueSuffix, "merged");
             if (audioInfo.errorKey != null) {
-                plugin.getServer().getScheduler().runTask(plugin, () -> plugin.sendConfigMsg(player, audioInfo.errorKey));
+                if (player != null) {
+                    plugin.getServer().getScheduler().runTask(plugin, () -> plugin.sendConfigMsg(player, audioInfo.errorKey, "url", audioUrl));
+                } else {
+                    plugin.getLogger().warning("预热音频下载失败 (" + audioInfo.errorKey + ") for URL: " + audioUrl);
+                }
                 if (audioInfo.audioFile.exists()) {
                     if (!audioInfo.audioFile.delete()) {
                         plugin.getLogger().warning("无法删除部分下载的合并音频文件: " + audioInfo.audioFile.getAbsolutePath());
@@ -162,7 +193,7 @@ public class ResourcePackGenerator {
                 Files.copy(tempAudioFile.toPath(), zos);
                 zos.closeEntry();
             }
-            plugin.getLogger().info("已创建合并的资源包: " + tempMergedPackFile.getAbsolutePath());
+            plugin.getLogger().info("已创建合并的资源包: " + tempMergedPackFile.getName() + " for sound " + soundEventName);
             String sha1;
             try (InputStream fis = new FileInputStream(tempMergedPackFile)) {
                 sha1 = DigestUtils.sha1Hex(fis);
@@ -173,20 +204,22 @@ public class ResourcePackGenerator {
 
             if (isRoomPlayback && roomContext != null) {
                 String oldTempMergedPackForRoom = roomContext.getPackFileName();
-                if (oldTempMergedPackForRoom != null && !oldTempMergedPackForRoom.equals(tempMergedPackFile.getName())) {
+                if (oldTempMergedPackForRoom != null && !oldTempMergedPackForRoom.equals(tempMergedPackFile.getName()) && !plugin.isPrewarmedPackFile(oldTempMergedPackForRoom)) {
                     cleanupPack(oldTempMergedPackForRoom);
                 }
                 roomContext.setPackFileName(tempMergedPackFile.getName());
             }
             return new PackInfo(packUrl, sha1, tempMergedPackFile.getName());
         } catch (Exception e) {
-            plugin.getLogger().log(Level.SEVERE, "生成合并资源包时出错 URL: " + audioUrl, e);
+            plugin.getLogger().log(Level.SEVERE, "生成合并资源包时出错 URL: " + audioUrl + ", SoundEvent: " + soundEventName, e);
             if (tempMergedPackFile.exists()) {
                 if (!tempMergedPackFile.delete()) {
                     plugin.getLogger().warning("无法删除生成失败的合并包: " + tempMergedPackFile.getAbsolutePath());
                 }
             }
-            plugin.getServer().getScheduler().runTask(plugin, () -> plugin.sendConfigMsg(player, "messages.playurl.packCreationFailed"));
+            if (player != null) {
+                plugin.getServer().getScheduler().runTask(plugin, () -> plugin.sendConfigMsg(player, "messages.playurl.packCreationFailed"));
+            }
             return null;
         } finally {
             if (tempAudioFile != null && tempAudioFile.exists()) {
@@ -197,15 +230,29 @@ public class ResourcePackGenerator {
         }
     }
 
-    private PackInfo generateIndependentPack(@NotNull Player player, @NotNull String audioUrl, @NotNull String soundEventName, boolean isRoomPlayback, @Nullable MusicRoom roomContext) {
-        String uniqueSuffix = UUID.randomUUID().toString().substring(0, 8);
-        File tempIndependentPackFile = new File(tempPackStorageDir, (isRoomPlayback && roomContext != null ? "mroom_" + roomContext.getRoomId() : "player_" + player.getUniqueId().toString().substring(0, 8)) + "_music_indie_" + uniqueSuffix + ".zip");
+    private PackInfo generateIndependentPack(@Nullable Player player, @NotNull String audioUrl, @NotNull String soundEventName, boolean isRoomPlayback, @Nullable MusicRoom roomContext) {
+        String uniqueSuffix = plugin.createStableIdentifier(audioUrl + "_" + soundEventName);
+        String packFileNamePrefix = "ind_";
+        if (player == null && soundEventName.startsWith(plugin.getHttpFileServer().getServePathPrefix() + ".preset.")) {
+            packFileNamePrefix += "prewarm_preset_";
+        } else if (isRoomPlayback && roomContext != null) {
+            packFileNamePrefix += "room_" + roomContext.getRoomId() + "_";
+        } else if (player != null) {
+            packFileNamePrefix += "player_" + player.getUniqueId().toString().substring(0, 8) + "_";
+        } else {
+            packFileNamePrefix += "unknown_";
+        }
+        File tempIndependentPackFile = new File(tempPackStorageDir, packFileNamePrefix + uniqueSuffix + ".zip");
         File tempAudioFile = null;
 
         try {
             DownloadedAudioInfo audioInfo = downloadAudioFile(audioUrl, uniqueSuffix, "independent");
             if (audioInfo.errorKey != null) {
-                plugin.getServer().getScheduler().runTask(plugin, () -> plugin.sendConfigMsg(player, audioInfo.errorKey));
+                if (player != null) {
+                    plugin.getServer().getScheduler().runTask(plugin, () -> plugin.sendConfigMsg(player, audioInfo.errorKey, "url", audioUrl));
+                } else {
+                    plugin.getLogger().warning("预热音频下载失败 (" + audioInfo.errorKey + ") for URL: " + audioUrl);
+                }
                 if (audioInfo.audioFile.exists()) {
                     if(!audioInfo.audioFile.delete()){
                         plugin.getLogger().warning("无法删除部分下载的独立音频文件: " + audioInfo.audioFile.getAbsolutePath());
@@ -215,9 +262,9 @@ public class ResourcePackGenerator {
             }
             tempAudioFile = audioInfo.audioFile;
 
-            int packFormat = plugin.getConfig().getInt("resourcePack.packFormat", 32);
+            int packFormat = plugin.getConfig().getInt("resourcePack.packFormat", 34);
             String description = plugin.getConfig().getString("resourcePack.description", "§b音乐播放器资源包");
-            String escapedDescription = gson.toJson(description).substring(1, gson.toJson(description).length() - 1);
+            String escapedDescription = gson.toJson(ChatColor.translateAlternateColorCodes('&',description)).substring(1, gson.toJson(ChatColor.translateAlternateColorCodes('&',description)).length() - 1);
             String packMcMetaContent = String.format("{\n  \"pack\": {\n    \"pack_format\": %d,\n    \"description\": \"%s\"\n  }\n}", packFormat, escapedDescription);
 
             String soundResourcePath = soundEventName.replace('.', '/');
@@ -245,7 +292,7 @@ public class ResourcePackGenerator {
                 Files.copy(tempAudioFile.toPath(), zos);
                 zos.closeEntry();
             }
-            plugin.getLogger().info("已创建独立的资源包: " + tempIndependentPackFile.getAbsolutePath());
+            plugin.getLogger().info("已创建独立的资源包: " + tempIndependentPackFile.getName() + " for sound " + soundEventName);
             String sha1;
             try (InputStream fis = new FileInputStream(tempIndependentPackFile)) {
                 sha1 = DigestUtils.sha1Hex(fis);
@@ -256,20 +303,22 @@ public class ResourcePackGenerator {
 
             if (isRoomPlayback && roomContext != null) {
                 String oldIndependentPackForRoom = roomContext.getPackFileName();
-                if (oldIndependentPackForRoom != null && !oldIndependentPackForRoom.equals(tempIndependentPackFile.getName())) {
+                if (oldIndependentPackForRoom != null && !oldIndependentPackForRoom.equals(tempIndependentPackFile.getName()) && !plugin.isPrewarmedPackFile(oldIndependentPackForRoom)) {
                     cleanupPack(oldIndependentPackForRoom);
                 }
                 roomContext.setPackFileName(tempIndependentPackFile.getName());
             }
             return new PackInfo(packUrl, sha1, tempIndependentPackFile.getName());
         } catch (Exception e) {
-            plugin.getLogger().log(Level.SEVERE, "生成独立资源包时出错 URL: " + audioUrl, e);
+            plugin.getLogger().log(Level.SEVERE, "生成独立资源包时出错 URL: " + audioUrl + ", SoundEvent: " + soundEventName, e);
             if (tempIndependentPackFile.exists()) {
                 if(!tempIndependentPackFile.delete()){
                     plugin.getLogger().warning("无法删除生成失败的独立包: " + tempIndependentPackFile.getAbsolutePath());
                 }
             }
-            plugin.getServer().getScheduler().runTask(plugin, () -> plugin.sendConfigMsg(player, "messages.playurl.packCreationFailed"));
+            if (player != null) {
+                plugin.getServer().getScheduler().runTask(plugin, () -> plugin.sendConfigMsg(player, "messages.playurl.packCreationFailed"));
+            }
             return null;
         } finally {
             if (tempAudioFile != null && tempAudioFile.exists()) {
@@ -282,6 +331,12 @@ public class ResourcePackGenerator {
 
     public void cleanupPack(String tempPackFileName) {
         if (tempPackFileName == null || tempPackFileName.isEmpty()) return;
+
+        if (plugin.isPresetPrewarmingEnabled() && plugin.isPrewarmedPackFile(tempPackFileName)) {
+            plugin.getLogger().info("跳过清理预热的资源包: " + tempPackFileName);
+            return;
+        }
+
         File packFile = new File(tempPackStorageDir, tempPackFileName);
         if (packFile.exists()) {
             if (packFile.delete()) {

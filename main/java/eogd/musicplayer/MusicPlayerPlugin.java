@@ -22,8 +22,10 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 
 public class MusicPlayerPlugin extends JavaPlugin {
 
@@ -46,6 +48,9 @@ public class MusicPlayerPlugin extends JavaPlugin {
     private String originalPackPromptMessage = "";
     private String basePackSha1 = null;
 
+    private final Map<String, ResourcePackGenerator.PackInfo> prewarmedPresetPacks = new ConcurrentHashMap<>();
+    private boolean presetPrewarmingEnabled = false;
+
     public record PendingOnlineSound(String packFileName, String soundEventName, String sha1, Player targetPlayer, String packUrl) {}
 
     @Override
@@ -62,6 +67,9 @@ public class MusicPlayerPlugin extends JavaPlugin {
 
         if (getConfig().getBoolean("httpServer.enabled", false)) {
             initializeHttpServerAndGenerator();
+            if (this.resourcePackGenerator != null && isPresetPrewarmingEnabled()) {
+                initializePresetPrewarming();
+            }
         } else {
             getLogger().info("内置 HTTP 服务器已在配置中禁用。在线播放功能将不可用。");
         }
@@ -88,7 +96,8 @@ public class MusicPlayerPlugin extends JavaPlugin {
         } else { getLogger().severe("无法获取指令 'internal_join_room'！");}
 
         startRoomCleanupTask();
-        getLogger().info(getName() + " 已成功启用！(资源包模式: " + (useMergedPackLogic ? "合并基础包" : "独立音乐包") + ")");
+        getLogger().info(getName() + " 已成功启用！(资源包模式: " + (useMergedPackLogic ? "合并基础包" : "独立音乐包") +
+                ", 预设预热: " + (isPresetPrewarmingEnabled() ? "开启" : "关闭") + ")");
     }
 
     private void initializeHttpServerAndGenerator() {
@@ -127,6 +136,8 @@ public class MusicPlayerPlugin extends JavaPlugin {
     private void loadConfiguration() {
         reloadConfig();
         FileConfiguration config = getConfig();
+
+        this.presetPrewarmingEnabled = config.getBoolean("resourcePack.enablePresetPrewarming", false);
 
         boolean mergingEnabledByConfig = config.getBoolean("baseResourcePack.enableMerging", false);
         this.basePackFileNameConfig = config.getString("baseResourcePack.fileName", "base_pack.zip");
@@ -181,6 +192,43 @@ public class MusicPlayerPlugin extends JavaPlugin {
         getLogger().info("已加载 " + presetSongsList.size() + " 首预设歌曲。");
     }
 
+    private void initializePresetPrewarming() {
+        if (!isPresetPrewarmingEnabled() || resourcePackGenerator == null || httpFileServer == null || !httpFileServer.isRunning()) {
+            getLogger().info("预设歌曲预热已禁用或必要组件未就绪。");
+            prewarmedPresetPacks.clear();
+            return;
+        }
+
+        getLogger().info("开始预设歌曲资源包预热...");
+        prewarmedPresetPacks.clear();
+
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+
+        for (PresetSong song : getPresetSongs()) {
+            String stableIdentifier = createStableIdentifier(song.getUrl());
+            String soundEventName = getHttpFileServer().getServePathPrefix() + ".preset." + stableIdentifier;
+
+            CompletableFuture<Void> future = resourcePackGenerator.generateAndServePack(null, song.getUrl(), soundEventName, false, null)
+                    .thenAccept(packInfo -> {
+                        if (packInfo != null) {
+                            prewarmedPresetPacks.put(song.getUrl(), packInfo);
+                            getLogger().info("预热成功: " + song.getName() + " -> " + packInfo.packFileName());
+                        } else {
+                            getLogger().warning("预热失败: " + song.getName() + " (URL: " + song.getUrl() + ")");
+                        }
+                    }).exceptionally(ex -> {
+                        getLogger().log(Level.SEVERE, "预热预设歌曲 " + song.getName() + " 时发生异常: " + ex.getMessage(), ex);
+                        return null;
+                    });
+            futures.add(future);
+        }
+
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenRun(() -> {
+            getLogger().info("预设歌曲资源包预热完成。共预热 " + prewarmedPresetPacks.size() + "/" + getPresetSongs().size() + " 个资源包。");
+        });
+    }
+
+
     @Override
     public void onDisable() {
         getLogger().info(getName() + " 正在禁用...");
@@ -190,25 +238,29 @@ public class MusicPlayerPlugin extends JavaPlugin {
         if (roomCleanupTask != null && !roomCleanupTask.isCancelled()) {
             roomCleanupTask.cancel();
         }
+
         activeMusicRooms.values().forEach(room -> {
-            if (room.getPackFileName() != null && resourcePackGenerator != null) {
+            if (room.getPackFileName() != null && resourcePackGenerator != null && !isPrewarmedPackFile(room.getPackFileName())) {
                 resourcePackGenerator.cleanupPack(room.getPackFileName());
             }
         });
         activeMusicRooms.clear();
+
         pendingSingleUserSounds.values().forEach(sound -> {
-            if (sound.packFileName() != null && resourcePackGenerator != null) {
+            if (sound.packFileName() != null && resourcePackGenerator != null && !isPrewarmedPackFile(sound.packFileName())) {
                 resourcePackGenerator.cleanupPack(sound.packFileName());
             }
         });
         pendingSingleUserSounds.clear();
+
         playerCurrentMusicPackFile.values().forEach(tempPackFile -> {
-            if (resourcePackGenerator != null) {
+            if (resourcePackGenerator != null && !isPrewarmedPackFile(tempPackFile)) {
                 resourcePackGenerator.cleanupPack(tempPackFile);
             }
         });
         playerCurrentMusicPackFile.clear();
         playerPendingPackType.clear();
+
         getLogger().info(getName() + " 已被禁用。");
     }
 
@@ -218,17 +270,46 @@ public class MusicPlayerPlugin extends JavaPlugin {
         }
         httpFileServer = null;
         resourcePackGenerator = null;
+
         loadConfiguration();
+
         if (getConfig().getBoolean("httpServer.enabled", false)) {
             initializeHttpServerAndGenerator();
+            if (this.resourcePackGenerator != null && isPresetPrewarmingEnabled()) {
+                initializePresetPrewarming();
+            } else {
+                prewarmedPresetPacks.values().forEach(packInfo -> {
+                    File baseDir;
+                    if (resourcePackGenerator != null) {
+                        baseDir = resourcePackGenerator.getTempPackStorageDir();
+                    } else {
+                        baseDir = new File(getDataFolder(), getConfig().getString("httpServer.tempDirectory", "temp_packs"));
+                    }
+                    File packFile = new File(baseDir, packInfo.packFileName());
+                    if(packFile.exists() && !packFile.delete()){
+                        getLogger().warning("重载配置并禁用预热后，无法删除旧的预热包: " + packInfo.packFileName());
+                    }
+                });
+                prewarmedPresetPacks.clear();
+                getLogger().info("预设歌曲预热已在重载后禁用，任何旧的预热包信息已清除。");
+            }
         } else {
             getLogger().info("HTTP 服务器在重载后仍为禁用状态。");
+            prewarmedPresetPacks.values().forEach(packInfo -> {
+                File packFile = new File(new File(getDataFolder(), getConfig().getString("httpServer.tempDirectory", "temp_packs")), packInfo.packFileName());
+                if(packFile.exists() && !packFile.delete()){
+                    getLogger().warning("重载配置并禁用HTTP服务后，无法删除旧的预热包: " + packInfo.packFileName());
+                }
+            });
+            prewarmedPresetPacks.clear();
         }
+
         if (roomCleanupTask != null && !roomCleanupTask.isCancelled()) {
             roomCleanupTask.cancel();
         }
         startRoomCleanupTask();
-        getLogger().info(getName() + " 的配置已重载。(资源包模式: " + (useMergedPackLogic ? "合并基础包" : "独立音乐包") + ")");
+        getLogger().info(getName() + " 的配置已重载。(资源包模式: " + (useMergedPackLogic ? "合并基础包" : "独立音乐包") +
+                ", 预设预热: " + (isPresetPrewarmingEnabled() ? "开启" : "关闭") + ")");
     }
 
     public ResourcePackGenerator getResourcePackGenerator() { return resourcePackGenerator; }
@@ -240,6 +321,25 @@ public class MusicPlayerPlugin extends JavaPlugin {
     public @Nullable String getBasePackSha1() { return useMergedPackLogic ? basePackSha1 : null; }
     public String getMusicPackPromptMessage() { return basePackPromptMessage; }
     public String getOriginalPackPromptMessage() { return useMergedPackLogic ? originalPackPromptMessage : ""; }
+
+    public boolean isPresetPrewarmingEnabled() {
+        return presetPrewarmingEnabled;
+    }
+
+    @Nullable
+    public ResourcePackGenerator.PackInfo getPrewarmedPackInfo(String songUrl) {
+        return prewarmedPresetPacks.get(songUrl);
+    }
+
+    public boolean isPrewarmedPackFile(String packFileName) {
+        if (packFileName == null) return false;
+        return prewarmedPresetPacks.values().stream().anyMatch(info -> packFileName.equals(info.packFileName()));
+    }
+
+    public String createStableIdentifier(String input) {
+        return DigestUtils.sha1Hex(input).substring(0, 16);
+    }
+
 
     public void addPendingSingleUserSound(UUID playerId, PendingOnlineSound soundInfo) {
         pendingSingleUserSounds.put(playerId, soundInfo);
@@ -322,7 +422,7 @@ public class MusicPlayerPlugin extends JavaPlugin {
                     }
                 }
             }
-            if (roomSpecificTempPack != null && resourcePackGenerator != null) {
+            if (roomSpecificTempPack != null && resourcePackGenerator != null && !isPrewarmedPackFile(roomSpecificTempPack)) {
                 resourcePackGenerator.cleanupPack(roomSpecificTempPack);
             }
             playerPendingPackType.entrySet().removeIf(entry -> entry.getValue().endsWith(":" + roomSpecificTempPack));
