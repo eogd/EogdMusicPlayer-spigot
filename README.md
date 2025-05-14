@@ -56,7 +56,7 @@ EogdMusicPlayer 是一款功能丰富的 Spigot 插件，允许服务器管理�
 # HTTP 文件服务器设置
 httpServer:
   enabled: true # 是否启用内置 HTTP 服务器以提供资源包 (true/false)
-  port: 8123 # HTTP 服务器监听的端口
+  port: 8123 # HTTP 服务器监听的端口,你必须修改此配置项为空闲的TCP端口！
   publicAddress: "" # 服务器的公共IP地址或域名。如果留空，插件会尝试自动检测，但可能不准确。
                     # 对于外部访问，强烈建议手动设置此项，例如："your.server.ip" 或 "your.domain.com"
   servePath: "musicpacks" # 资源包在URL中的路径前缀，例如 http://<publicAddress>:<port>/musicpacks/pack.zip
