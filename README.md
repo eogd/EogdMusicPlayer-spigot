@@ -35,7 +35,7 @@ EogdMusicPlayer 是一款功能丰富的 Spigot 插件，允许服务器管理�
 
 *   **Minecraft 服务器**: Spigot 1.21 或兼容的 PaperMC 等服务端。
 *   **Java**: Java 17 或更高版本。
-*   **依赖 (通常由插件内部处理或服务器提供)**:
+*   **依赖**:
     *   Gson (用于 JSON 处理)
     *   Apache Commons Codec (用于 SHA-1 哈希计算)
 
